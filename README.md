@@ -1,182 +1,227 @@
-# reFlex — Agent Referee
+# reFlex: Agent Referee
 
-**A browser extension that coordinates AI agents before they break each other’s work.**
+An agent referee for Slack's website. reFlex coordinates work on shared files,
+keeps active inputs available, and requires human approval before eligible file
+operations run. An Edge/Chrome side panel shows the review; an Ember sprite on
+the Slack page reacts to the referee's decisions.
 
-reFlex sits beside Slack in Chrome and reviews sensitive agent actions in context. When one agent wants to change or remove a file, the referee checks whether that action conflicts with protected data, another active task, a stale file version, or a required human approval.
-
-The result is surfaced through an on-screen referee sprite:
-
-- 🟢 **Green** — the action is allowed
-- 🟡 **Yellow** — the action is deferred or needs review
-- 🔴 **Red** — the action is blocked
-
-Rather than acting like a standalone chatbot, reFlex uses the environment around the agents — the current Slack workspace/channel, active task dependencies, file state, and approval history — to decide what should happen next.
-
-## Demo scenario
-
-The prototype focuses on one clear conflict:
-
-1. A **report agent** starts work and reserves `logs/agent_activity.log` as an active dependency.
-2. A **cleanup agent** proposes removing that same log.
-3. reFlex returns **DEFER** because another active task still needs the file.
-4. The user reviews and approves the report.
-5. The dependency is released and the cleanup request is re-evaluated with a **new action ID**.
-6. The user can approve the fresh cleanup request, which moves the file to quarantine rather than permanently deleting it.
-
-This demonstrates the core idea: an action can look safe in isolation and still be unsafe in context.
+The current `main` demo has two workers sharing `logs/agent_activity.log`. The
+report worker reserves the log while preparing a draft. The cleanup worker asks
+to remove that same log. The referee defers cleanup until the report is approved,
+then creates a fresh cleanup review for the owner to approve separately.
 
 ## How it works
 
-```text
-Slack in Chrome
-     │
-     ▼
-reFlex browser extension
-(side panel + referee sprite)
-     │
-     ▼
-Local browser bridge
-     │
-     ▼
-Agent Referee
-├─ deterministic policy checks
-├─ active task dependencies
-├─ file hash / stale-state checks
-├─ approval validation
-└─ audit logging
-     │
-     ▼
-Controlled executor
-     │
-     ├─ publish approved report
-     └─ quarantine approved cleanup
+The browser extension supplies Slack workspace/channel context and shows review
+controls. A paired localhost bridge coordinates tasks and sends proposals to the
+Python referee. The referee checks protected paths, active dependencies, file
+state, and approvals. The controlled executor publishes the approved report or
+moves an approved cleanup target to quarantine, recording the outcome in an
+audit journal.
+
+Before execution, the host checks the current state again. A changed file, a new
+dependency, or an already-used action can invalidate an earlier review. The
+browser never receives unrestricted filesystem authority.
+
+## Which version should I use?
+
+| Version | What it contains | Start here |
+| --- | --- | --- |
+| `main` | Integrated side panel, sprite, Python referee, and shared-log demo with deterministic sample workers | The quick start below |
+| `feat/browser-extension` | OpenRouter-backed ReportAgent and CleanupAgent, using the earlier three-file scenario | [OpenRouter setup](https://github.com/20SHA07/reFlex/blob/feat/browser-extension/OPENROUTER_SETUP.md) |
+| `sprite/` on `main` | Standalone visual development extension | [Sprite development](sprite/README.md) |
+
+OpenRouter is available on the feature branch. The current `main` bridge does
+not accept `--openrouter`, and its sample reports do not call an AI model. The
+feature branch currently has a different demo and does not include main's
+integrated sprite. Use each branch's matching setup instructions.
+
+## Quick start in Edge or Chrome
+
+You need Python 3.10 or newer and Slack open in a desktop browser. Node.js 22+
+is only needed for JavaScript tests. The main demo needs no Python package
+installation, JavaScript build, Slack bot token, or model API key.
+
+Get `main`:
+
+```sh
+git clone --branch main https://github.com/20SHA07/reFlex.git
+cd reFlex
 ```
 
-The browser never receives unrestricted filesystem authority. It submits requests and approvals to a local bridge, which routes them through the controlled referee/executor.
+If you already have the repository, stop any running bridge with `Ctrl+C`, then
+update your checkout:
 
-## Safety model
-
-The referee core makes deterministic decisions before execution:
-
-- **BLOCK** — protected path, unsupported operation, invalid path, or unsafe filesystem condition
-- **DEFER** — another active task still depends on the file
-- **REVIEW** — the action is eligible but requires human approval
-- **ALLOW** — the exact reviewed action passed final checks and executed
-
-Before executing an approved action, reFlex checks the current state again. If the file changed, a new dependency appeared, the action was already used, or the review became stale, execution is prevented.
-
-Cleanup is implemented as **quarantine**, not permanent deletion.
-
-## Browser extension
-
-The Chrome extension is built with **Manifest V3** and uses a native **side panel** while Slack is open in the browser.
-
-Implemented browser features include:
-
-- Slack workspace/channel-aware review state
-- selected-text import only when the user explicitly requests it
-- review cards with action status and explanations
-- referee sprite with green, yellow, and red cards
-- immutable review IDs and fresh approvals after dependency release
-- local bridge pairing for real demo file operations
-- retry and stale-context handling
-
-The extension does **not** read Slack tokens, cookies, or message history, and it does not require a Slack bot installation.
-
-## Quick start
-
-### 1. Load the extension
-
-Requirements: **Chrome 116+**.
-
-1. Clone this repository.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Select **Load unpacked**.
-5. Choose the `browser-extension/` directory.
-6. Open Slack in Chrome at `https://app.slack.com/client/...`.
-7. Pin **reFlex · Agent Referee** and open the side panel.
-
-The extension starts in **Preview** mode, so no files are changed.
-
-For extension-specific instructions, see [`browser-extension/README.md`](browser-extension/README.md).
-
-### 2. Connect the real local demo
-
-Requirements: **Python 3.10+**.
-
-From the repository root:
-
-```bash
-python3 browser_bridge.py --extension-id YOUR_EXTENSION_ID
+```sh
+git fetch origin
+git switch main
+git pull --ff-only origin main
 ```
 
-The bridge prints the location of a temporary pairing token. Paste that token into **Connect local demo** in the extension, allow localhost access, and run the report/cleanup scenario.
+1. Open `edge://extensions` in Edge or `chrome://extensions` in Chrome. Enable
+   **Developer mode**, select **Load unpacked**, and choose `browser-extension/`,
+   the folder containing `manifest.json`.
+2. Find **reFlex · Agent Referee** on that page and copy its extension ID. If you
+   updated an existing installation, click **Reload** on its card.
+3. From the repository root, start the local bridge:
 
-The bridge listens only on `127.0.0.1:8765` and creates disposable sample files for the demo.
+   ```sh
+   python browser_bridge.py --extension-id YOUR_EXTENSION_ID
+   ```
 
-Full setup: [`browser-extension/BRIDGE.md`](browser-extension/BRIDGE.md).
+   Replace `YOUR_EXTENSION_ID` with the ID from your browser. Use `python3` or
+   `py` if that is your Python command. Keep this terminal running.
+4. The terminal prints a private `pairing-token.txt` path and the location of
+   the disposable demo files. Open the token file locally and copy its contents.
+5. Open Slack on the same computer at `https://app.slack.com/client/...`, enter
+   a channel, and reload the page. Open reFlex from the browser's Extensions
+   menu or pinned toolbar icon. In Edge, **Open in sidebar** is also available
+   from the extension's menu.
+6. Expand **Connect local demo**, paste the pairing token, connect, and allow
+   localhost access. The badge should change from **Preview** to **Local demo**.
 
-## Repository structure
+Load only `browser-extension/` for this flow. It already includes the sprite;
+loading `sprite/` separately would add a second overlay. Slack's desktop app
+does not load this browser extension.
 
-```text
-reFlex/
-├── browser-extension/       # Chrome side panel, Slack adapter, sprite UI, browser tests
-├── referee_agent/           # deterministic policy engine + controlled executor
-│   ├── referee.py
-│   ├── executor.py
-│   ├── demo.py
-│   ├── docs/
-│   └── tests/               # 30 safety and coordination tests
-├── browser_bridge.py        # paired localhost bridge to the real executor
-├── tests/                   # bridge integration tests
-└── .github/workflows/       # browser + bridge CI
+## Run the shared-log demo
+
+Optionally select text in the Slack channel and press **Use selection** to add
+it to the request. The current main report uses a deterministic sample and
+quotes the supplied request context.
+
+| Step | Action | Expected result |
+| --- | --- | --- |
+| 1 | **Start report** | A report draft appears. Its dependency on `logs/agent_activity.log` stays active. |
+| 2 | **Review cleanup** | The log receives **DEFER**. It cannot be approved while the report needs it. |
+| 3 | Read the draft, then **Approve & publish report** | The reviewed draft is written under `reports/`, and the log's dependency is released. |
+| 4 | Inspect the refreshed cleanup card | A new **REVIEW** proposal appears with a new action ID. No cleanup has run yet. |
+| 5 | **Approve quarantine** | The log moves to quarantine and the card shows the completed outcome. |
+
+The host implements cleanup as quarantine. It does not permanently delete the
+file. A released dependency alone never approves an old cleanup proposal.
+
+To verify the disk changes, open the disposable root printed in the terminal.
+Each Slack workspace/channel has its own generated session folder. Inside it,
+inspect `workspace/reports/`, `workspace/logs/`, and
+`private_state/quarantine/`. The audit journal is `private_state/audit.jsonl`.
+
+Switch Slack channels to check that reviews stay with their channel. To start
+fresh, stop the bridge with `Ctrl+C`, run it again, and pair with its new token.
+Its temporary fixture and audit evidence remain available for inspection.
+
+## Preview and sprite behavior
+
+**Preview** runs in browser session storage and changes no files. **Local demo**
+uses the Python executor on newly created disposable files. The sprite receives
+current review state from the extension's service worker in both modes; it has
+no file or approval authority.
+
+| Referee state | Sprite card | Meaning |
+| --- | --- | --- |
+| `BLOCK` | Red | Policy prevents the operation. |
+| `DEFER` | Yellow | An active task still needs the file. |
+| `REVIEW` | Yellow | The proposal needs human approval. |
+| `ALLOW` | Green | The host reports the allowed outcome. Check the panel for execution status. |
+
+The panel distinguishes **DEFER** from **REVIEW**, even though both use a yellow
+sprite card. For visual rehearsal, `Alt+Shift+E` shows green, `Alt+Shift+W` shows
+yellow, and `Alt+Shift+R` shows red. These shortcuts do not call the backend or
+approve a file operation.
+
+## Test the code
+
+From the repository root, run the bridge and extension checks:
+
+```sh
+python -m unittest discover -s tests -p 'test_browser_bridge.py' -v
+node --test browser-extension/tests/*.test.mjs
 ```
 
-## Testing
+Run the core referee's tests and its separate three-file demonstration:
 
-The referee core includes **30 safety and coordination tests** covering protected paths, active dependencies, stale state, authorization, duplicate execution, concurrency, path traversal, symlinks, hardlinks, quarantine behavior, and failure handling.
-
-Run the core tests:
-
-```bash
+```sh
 cd referee_agent
 python -m unittest discover -s tests -v
+python demo.py
+cd ..
 ```
 
-Run extension and bridge checks from the repository root:
+That core demo checks protected source data, a reserved report input, and an
+eligible debug log. Its paths differ from the shared-log browser demo. It
+simulates owner approvals inside a new temporary fixture.
 
-```bash
-node --test browser-extension/tests/*.test.mjs
-python3 -m unittest discover -s tests -p 'test_browser_bridge.py' -v
+The [GitHub workflow](.github/workflows/browser-extension.yml) also runs a
+Chromium integration test with a Slack page fixture and the actual local
+executor. It saves browser screenshots as run artifacts. It does not use your
+Slack account. Native Edge sidebar opening and the permission prompt still
+need a manual check on your computer. See the
+[extension testing guide](browser-extension/README.md#checks) for the local
+Playwright command.
+
+## Optional OpenRouter agents
+
+The [feature branch](https://github.com/20SHA07/reFlex/tree/feat/browser-extension)
+contains `test_agents/report_agent.py`, `test_agents/cleanup_agent.py`, and
+`run_test_agents.py`. From a checkout of that branch:
+
+```sh
+python run_test_agents.py --show-report
+python run_test_agents.py --openrouter --show-report
 ```
 
-The GitHub Actions workflow also installs Chromium with Playwright and runs an end-to-end browser smoke test against the real local executor.
+The first command uses offline samples. The second prompts for your OpenRouter
+API key in the terminal and makes model calls. Neither command approves file
+operations. Follow the branch's
+[OpenRouter guide](https://github.com/20SHA07/reFlex/blob/feat/browser-extension/OPENROUTER_SETUP.md)
+for its browser flow, model configuration, and three-file test expectations.
 
-## Trust boundary
+Keep the provider key in the Python backend. Only the separate local pairing
+token goes into the extension. The Python OpenRouter path reads
+`OPENROUTER_API_KEY` from the environment or prompts for it; it does not load
+`.env` files. Event redemption codes are not API keys.
 
-reFlex protects actions that are routed through its controlled executor. It is **not** an operating-system sandbox and cannot stop an unrelated process or an agent with unrestricted shell/filesystem access from modifying files directly.
+## Troubleshooting
 
-The current bridge is intentionally a local hackathon prototype:
+| Symptom | Check |
+| --- | --- |
+| `browser_bridge.py` is missing | Check your directory and branch. Run from the repository root after updating `main`. |
+| `--openrouter` is unrecognized | That option belongs to the OpenRouter feature branch, not the current main bridge. |
+| `python` is unavailable | Try `python3` or `py`; Python 3.10+ is required. |
+| The panel cannot find Slack | Open a channel on `app.slack.com` in the same browser window, reload Slack, then press **Refresh**. |
+| The badge still says **Preview** | Complete local pairing; preview does not change files. |
+| Pairing fails | Keep the bridge running, allow localhost access, use the current token, and check the ID on the reFlex extension card. IDs can change when loading a different folder. |
+| Port `8765` is in use | Stop the older bridge with `Ctrl+C`, then start one bridge process. |
+| A review is stale or the request timed out | Refresh the panel to check the current outcome. Do not assume a timed-out request made no changes. A changed file requires a fresh review; a paused fixture requires a restart. |
+| Two sprites appear | Disable the standalone **The Ember for Slack** extension while testing the integrated reFlex extension. |
 
-- pairing represents one local demo owner rather than verified Slack identity
-- workspace/channel IDs are routing context, not authentication
-- the report generator is currently a deterministic sample, not a live model-generated report
-- task/action state is single-process and in memory
-- provider credentials should remain on a trusted backend in future integrations
+## Project layout and scope
 
-These boundaries are deliberate: the prototype demonstrates the coordination and enforcement path without claiming system-wide control it does not have.
+| Path on `main` | Responsibility |
+| --- | --- |
+| `browser-extension/` | Side panel, Slack context, review controls, and integrated sprite |
+| `browser_bridge.py` | Local pairing, disposable fixtures, task orchestration, and approval handling |
+| `referee_agent/referee.py` | Deterministic protection and dependency rules |
+| `referee_agent/executor.py` | Reviewed file operations, hash checks, quarantine, and audit logging |
+| `sprite/` | Standalone renderer and animation development harness |
+| `tests/` and `referee_agent/tests/` | Bridge and core referee checks |
 
-## Why reFlex
+Protection applies to operations sent through the controlled executor. reFlex
+is not an operating-system sandbox and cannot stop unrelated programs from
+editing files directly. Pairing identifies one local demo owner; Slack channel
+context routes work but does not authenticate a Slack user. The extension does
+not post messages to Slack. Approval state lives in one Python process and is
+not restored from the audit journal after a restart.
 
-Most agent safety controls evaluate one agent at a time. reFlex focuses on a different failure mode: **multiple useful agents taking actions that are individually reasonable but mutually incompatible**.
+For integration details, see the [browser contract](browser-extension/CONTRACT.md),
+[bridge guide](browser-extension/BRIDGE.md), and
+[referee integration guide](referee_agent/docs/referee_integration.md).
 
-By putting the referee inside the environment where the work is happening, users get immediate, visual, contextual decisions instead of generic warnings after the fact.
+## Future integrations
 
-## Roadmap
+Slack's website is the first environment. Possible next steps include adapters
+for GitHub, Teams, other browser-based agent tools, and a local device companion.
+These are future integrations; policy checks and execution authority should
+remain on the trusted backend.
 
-The current prototype uses Slack in Chrome as the first environment. The same referee model can be extended through environment-specific adapters for GitHub, Teams, browser-based agent tools, and a local device companion — while keeping policy checks and execution authority on a trusted backend.
-
----
-
-Built for **AI Tinkerers — Agents, Everywhere**.
+Built for **AI Tinkerers: Agents, Everywhere**.

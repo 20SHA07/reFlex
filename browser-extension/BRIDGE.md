@@ -2,12 +2,16 @@
 
 The browser extension opens beside Slack's website. The bridge below connects
 that interface to `referee_agent/executor.py`, using disposable sample files.
-It does not require a Slack app, Slack bot token, or model API key.
+The current `main` demo uses deterministic samples and needs no Slack app, Slack
+bot token, or model API key. OpenRouter is a separate feature-branch flow; follow
+[its setup guide](https://github.com/20SHA07/reFlex/blob/feat/browser-extension/OPENROUTER_SETUP.md)
+when using that branch.
 
 ## Start the local demo
 
-1. Load `browser-extension/` as an unpacked extension in Chrome's extension
-   developer mode. Copy its 32-letter extension ID from `chrome://extensions`.
+1. Load `browser-extension/` from `main` as an unpacked extension with Developer
+   mode enabled. Copy the 32-letter ID from the **reFlex · Agent Referee** card
+   at `edge://extensions` in Edge or `chrome://extensions` in Chrome.
 2. From the repository root, run Python 3.10 or newer:
 
    ```sh
@@ -73,3 +77,4 @@ Run the bridge checks from the repository root:
 ```sh
 python3 -m unittest discover -s tests -p 'test_browser_bridge.py' -v
 ```
+
