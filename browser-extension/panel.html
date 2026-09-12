@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>reFlex · Agent referee</title>
+    <link rel="stylesheet" href="panel.css">
+    <script src="panel.js" type="module"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">r<span>F</span></span><div><h1>reFlex</h1><p>Agent referee</p></div></div>
+        <span id="mode-badge" class="mode-badge">Preview</span>
+      </header>
+
+      <div id="mode-notice" class="notice"><span class="notice-dot" aria-hidden="true"></span><p id="mode-description">Preview uses sample data. No files are changed.</p></div>
+
+      <section class="context-card" aria-labelledby="context-heading">
+        <div class="section-line"><h2 id="context-heading">Slack context</h2><button id="refresh-context" class="text-button" type="button">Refresh</button></div>
+        <p id="channel-name" class="channel-name">Finding your channel…</p>
+        <p id="workspace-name" class="muted">Open a channel in Slack on the web.</p>
+        <p class="context-note">Channel context routes the review. It does not verify your identity.</p>
+      </section>
+
+      <div id="error-box" class="error-box" role="alert" hidden><p id="error-text"></p><button id="dismiss-error" class="text-button" type="button" aria-label="Dismiss error">Dismiss</button></div>
+      <p id="activity-status" class="activity-status" role="status" aria-live="polite">Getting ready…</p>
+
+      <section class="request-section" aria-labelledby="request-heading">
+        <div class="section-line"><h2 id="request-heading">Give the agents a task</h2><button id="use-selection" class="text-button" type="button" disabled>Use selection</button></div>
+        <label class="sr-only" for="request-text">Optional request context</label>
+        <textarea id="request-text" rows="3" maxlength="2000" placeholder="Optional context from your conversation…"></textarea>
+        <p class="field-hint">Only text you explicitly select is imported. This demo follows a fixed report and cleanup scenario.</p>
+        <div class="action-grid"><button id="start-report" class="button button-primary" type="button" disabled><span aria-hidden="true">↗</span> Start report</button><button id="start-cleanup" class="button button-secondary" type="button" disabled><span aria-hidden="true">≡</span> Review cleanup</button></div>
+      </section>
+
+      <section id="empty-state" class="empty-state" aria-labelledby="empty-heading"><span class="empty-icon" aria-hidden="true">⌘</span><h2 id="empty-heading">Two agents. One shared file.</h2><p>Start a report, then review cleanup. See reFlex protect the source and hold the report’s input until it is free.</p><div class="legend"><span><i class="dot red"></i>Protect</span><span><i class="dot amber"></i>Hold</span><span><i class="dot green"></i>Review</span></div></section>
+
+      <section id="report-section" class="result-section" aria-labelledby="report-heading" hidden><div class="section-line"><h2 id="report-heading">Report agent</h2><span id="report-status" class="status-badge"></span></div><article class="result-card"><p class="eyebrow">Report draft</p><p id="report-path" class="file-path"></p><p id="report-dependency" class="muted"></p><details id="draft-details"><summary>Read the draft</summary><pre id="report-draft"></pre></details><button id="approve-report" class="button button-primary full-width" type="button">Approve &amp; publish report</button><p id="report-footnote" class="field-hint">Approval publishes this draft and releases its input file.</p></article></section>
+
+      <section id="cleanup-section" class="result-section" aria-labelledby="cleanup-heading" hidden><div class="section-line"><h2 id="cleanup-heading">Cleanup agent</h2><span id="cleanup-count" class="section-count"></span></div><div id="cleanup-items" class="cleanup-items"></div><p class="field-hint">Approved cleanup moves demo files to quarantine. Protected files stay in place.</p></section>
+
+      <section id="events-section" class="result-section" aria-labelledby="events-heading" hidden><div class="section-line"><h2 id="events-heading">Referee activity</h2><span class="section-count">Latest first</span></div><ol id="event-list" class="event-list"></ol></section>
+
+      <details class="connection" id="connection-details"><summary><span class="connection-light" id="connection-light" aria-hidden="true"></span><span id="connection-summary">Connect local demo</span></summary><div class="connection-body"><p id="principal-name" class="principal-name">Preview owner</p><p class="field-hint">Run the local bridge from the repository, then paste its pairing token. It operates on a new disposable demo folder, using a local owner identity.</p><form id="connect-form"><label for="pairing-token">Pairing token</label><input id="pairing-token" type="password" autocomplete="off" spellcheck="false" maxlength="256" placeholder="Paste local token"><button id="connect-local" class="button button-secondary full-width" type="submit">Connect to local demo</button></form><button id="disconnect-local" class="button button-secondary full-width" type="button" hidden>Return to preview</button><p class="field-hint">The token stays in this browser session. No Slack bot token or model API key is needed here.</p></div></details>
+
+      <footer>Review first. Keep the important things.</footer>
+    </main>
+  </body>
+</html>
