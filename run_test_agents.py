@@ -1,4 +1,4 @@
-"""Run both reFlex test agents against the referee without approving mutations."""
+"""Run both Truce test agents against the referee without approving mutations."""
 from __future__ import annotations
 
 import argparse

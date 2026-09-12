@@ -1,0 +1,28 @@
+{
+  "name": "channel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Truce coordinates report work and cleanup in a Slack thread via CopilotKit Channels.",
+  "scripts": {
+    "dev": "node --env-file=../../.env --import tsx --watch src/server.ts",
+    "start": "node --env-file=../../.env --import tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "referee:seed": "node --import tsx src/referee/scripts/seed.ts",
+    "referee:status": "node --env-file-if-exists=../../.env --import tsx src/referee/scripts/status.ts",
+    "referee:test": "node --import tsx --test \"src/referee/tests/**/*.test.ts\"",
+    "referee:demo-check": "node --env-file-if-exists=../../.env --import tsx src/referee/scripts/demo-check.ts",
+    "referee:reset": "node --env-file-if-exists=../../.env --import tsx src/referee/scripts/reset.ts"
+  },
+  "dependencies": {
+    "@copilotkit/channels": "0.9.2",
+    "@copilotkit/runtime": "1.70.3",
+    "agent-core": "*",
+    "better-sqlite3": "12.4.1",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13"
+  }
+}

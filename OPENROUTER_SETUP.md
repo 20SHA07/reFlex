@@ -30,7 +30,7 @@ key. The setup does not redeem sponsor offers or include event codes.
 
 The commands below prompt for the key with input hidden. Paste it into your
 terminal and press Enter. The key is held by the Python process; it is not saved
-by reFlex or sent to the browser extension. Do not paste the key into Slack,
+by Truce or sent to the browser extension. Do not paste the key into Slack,
 extension settings, a terminal command argument, or your repository.
 
 For automated local runs you can instead provide `OPENROUTER_API_KEY` through
@@ -79,7 +79,7 @@ python run_test_agents.py --show-report
 
 3. Enter your OpenRouter API key at the hidden terminal prompt. Keep this process
    running. The terminal prints a separate private `pairing-token.txt` path.
-4. Open Slack in Edge on the same computer and reload the channel. Open reFlex's
+4. Open Slack in Edge on the same computer and reload the channel. Open Truce's
    sidebar, expand **Connect local demo**, and paste the **pairing token** from
    that file. Allow localhost access. The pairing token and provider API key are
    different; only the pairing token goes into the extension.

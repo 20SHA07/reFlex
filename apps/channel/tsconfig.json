@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@copilotkit/channels",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+    ,"paths": {
+      "@copilotkit/runtime/v2": ["../../node_modules/@copilotkit/runtime/dist/v2/index.d.cts"],
+      "@copilotkit/runtime/v2/node": ["../../node_modules/@copilotkit/runtime/dist/v2/node.d.cts"]
+    }
+  },
+  "include": ["src", "../../types"]
+}
