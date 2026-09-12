@@ -20,8 +20,8 @@ It does not require a Slack app, Slack bot token, or model API key.
    `http://127.0.0.1:8765`.
 4. Open a channel on `https://app.slack.com/client/...`, open the extension's side
    panel, allow its requested localhost access, and connect with that token.
-5. Start a sample report, then review cleanup. Approve the debug log's quarantine,
-   inspect and approve the report, then approve the fresh working-input cleanup.
+5. Start a sample report, then review cleanup. The referee defers the shared-log
+   deletion request until you approve the report; then approve the fresh log cleanup.
 
 If pairing fails, confirm the extension ID and that this terminal process is
 still running. Reloading an unpacked extension can clear its session connection;
@@ -32,18 +32,16 @@ approval cards cannot authorize the new process.
 
 | File | Initial cleanup decision after starting the report | Visible result |
 | --- | --- | --- |
-| `data/source_metrics.csv` | BLOCK | Protected source stays unchanged; approval cannot override it. |
-| `working/report_input.csv` | DEFER | The report reserves this input until publication is approved. |
-| `scratch/debug.log` | REVIEW | Explicit approval moves the file into quarantine. |
+| `logs/agent_activity.log` | DEFER | The report agent reserves this shared log until publication is approved. |
 
 Report approval publishes the exact draft to a unique path under `reports/`,
-then releases the input dependency. The executor re-evaluates deferred cleanup
+then releases the shared-log dependency. The executor re-evaluates deferred cleanup
 with a new action ID. It requires a new approval; the old decision cannot perform
 the new operation. File hash changes prevent an outdated cleanup review from
 executing. Quarantine and an audit journal remain outside the sample workspace.
 
 The terminal prints the disposable root directory for inspecting the generated
-report, source data, quarantine, and `private_state/audit.jsonl`. Each Slack
+report, shared activity log, quarantine, and `private_state/audit.jsonl`. Each Slack
 workspace/channel gets its own subdirectory and workflow. Stopping the bridge
 invalidates its token and removes the token file; fixture evidence remains in
 the operating system's temporary directory for inspection. Remove that specific

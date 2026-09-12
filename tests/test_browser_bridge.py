@@ -29,39 +29,33 @@ class WorkflowTests(unittest.TestCase):
         return self.bridge.dispatch({"operation": operation, "request_id": uuid.uuid4().hex,
                                      "context": CONTEXT, **kwargs})["state"]
 
-    def test_complete_flow_preserves_source_and_requires_new_approval(self):
+    def test_shared_log_deletion_waits_for_report_and_requires_new_approval(self):
         initial = self.dispatch("start_report", input={"text": "Prepare the client update."})
         session = self.bridge.sessions[("T123", "C123")]
-        source_hash = session.referee.fingerprint("data/source_metrics.csv")
         report = initial["report"]
         self.assertFalse((session.workspace / report["output_path"]).exists())
         self.assertIn("Total: 45", report["draft"])
         review = self.dispatch("start_cleanup")
-        protected, working, debug = review["cleanup"]["items"]
-        self.assertEqual([item["verdict"] for item in (protected, working, debug)], ["BLOCK", "DEFER", "REVIEW"])
-        for unavailable in (protected, working):
-            with self.assertRaises(BridgeError) as denied:
-                self.dispatch("approve_cleanup", target=target(unavailable))
-            self.assertEqual(denied.exception.code, "approval_unavailable")
-        after_debug = self.dispatch("approve_cleanup", target=target(debug))
-        self.assertTrue(after_debug["cleanup"]["items"][2]["executed"])
-        self.assertFalse((session.workspace / "scratch/debug.log").exists())
-        self.assertTrue((session.referee.quarantine / debug["id"] / "original.bin").exists())
+        [log_deletion] = review["cleanup"]["items"]
+        self.assertEqual(log_deletion["path"], "logs/agent_activity.log")
+        self.assertEqual(log_deletion["verdict"], "DEFER")
+        with self.assertRaises(BridgeError) as denied:
+            self.dispatch("approve_cleanup", target=target(log_deletion))
+        self.assertEqual(denied.exception.code, "approval_unavailable")
         approved = self.dispatch("approve_report", target=target(report))
         self.assertEqual(approved["report"]["status"], "completed")
         self.assertEqual((session.workspace / report["output_path"]).read_text(), report["draft"])
         self.assertEqual(session.referee.status()["active_tasks"], [])
-        fresh = approved["cleanup"]["items"][1]
+        fresh = approved["cleanup"]["items"][0]
         self.assertEqual(fresh["verdict"], "REVIEW")
-        self.assertNotEqual(fresh["id"], working["id"])
+        self.assertNotEqual(fresh["id"], log_deletion["id"])
         self.assertTrue((session.workspace / fresh["path"]).exists())
         with self.assertRaises(BridgeError) as stale:
-            self.dispatch("approve_cleanup", target=target(working))
+            self.dispatch("approve_cleanup", target=target(log_deletion))
         self.assertEqual(stale.exception.code, "stale_review")
         done = self.dispatch("approve_cleanup", target=target(fresh))
-        self.assertTrue(done["cleanup"]["items"][1]["executed"])
+        self.assertTrue(done["cleanup"]["items"][0]["executed"])
         self.assertFalse((session.workspace / fresh["path"]).exists())
-        self.assertEqual(source_hash, session.referee.fingerprint("data/source_metrics.csv"))
         self.assertNotIn(self.bridge.token, json.dumps(done))
         self.assertNotIn(self.bridge.token, session.referee.audit_path.read_text())
 
@@ -97,7 +91,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.dispatch("status")["report"]["status"], "awaiting_approval")
 
     def test_stale_file_is_not_quarantined(self):
-        debug = self.dispatch("start_cleanup")["cleanup"]["items"][2]
+        debug = self.dispatch("start_cleanup")["cleanup"]["items"][0]
         session = self.bridge.sessions[("T123", "C123")]
         path = session.workspace / debug["path"]
         path.write_text("Changed after review")
@@ -105,24 +99,24 @@ class WorkflowTests(unittest.TestCase):
             self.dispatch("approve_cleanup", target=target(debug))
         self.assertEqual(blocked.exception.code, "stale_review")
         self.assertEqual(path.read_text(), "Changed after review")
-        self.assertEqual(self.dispatch("status")["cleanup"]["items"][2]["verdict"], "BLOCK")
-        fresh = self.dispatch("start_cleanup")["cleanup"]["items"][2]
+        self.assertEqual(self.dispatch("status")["cleanup"]["items"][0]["verdict"], "BLOCK")
+        fresh = self.dispatch("start_cleanup")["cleanup"]["items"][0]
         self.assertNotEqual(debug["id"], fresh["id"])
         self.dispatch("approve_cleanup", target=target(fresh))
         self.assertFalse(path.exists())
 
     def test_report_start_replaces_earlier_cleanup_review_with_defer(self):
-        old = self.dispatch("start_cleanup")["cleanup"]["items"][1]
+        old = self.dispatch("start_cleanup")["cleanup"]["items"][0]
         self.assertEqual(old["verdict"], "REVIEW")
         state = self.dispatch("start_report")
-        fresh = state["cleanup"]["items"][1]
+        fresh = state["cleanup"]["items"][0]
         self.assertEqual(fresh["verdict"], "DEFER")
         self.assertNotEqual(old["id"], fresh["id"])
         with self.assertRaises(BridgeError) as stale:
             self.dispatch("approve_cleanup", target=target(old))
         self.assertEqual(stale.exception.code, "stale_review")
         completed = self.dispatch("approve_report", target=target(state["report"]))
-        self.assertEqual(completed["cleanup"]["items"][1]["verdict"], "REVIEW")
+        self.assertEqual(completed["cleanup"]["items"][0]["verdict"], "REVIEW")
 
     def test_failure_after_registration_pauses_fixture_instead_of_hiding_lease(self):
         self.dispatch("status")
@@ -138,7 +132,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(paused.exception.code, "restart_required")
 
     def test_report_after_input_was_quarantined_creates_no_hidden_task(self):
-        working = self.dispatch("start_cleanup")["cleanup"]["items"][1]
+        working = self.dispatch("start_cleanup")["cleanup"]["items"][0]
         self.dispatch("approve_cleanup", target=target(working))
         with self.assertRaises(BridgeError) as missing:
             self.dispatch("start_report")

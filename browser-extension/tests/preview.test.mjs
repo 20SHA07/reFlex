@@ -7,38 +7,30 @@ const context = {workspace_id: "T123", channel_id: "C123", url: "https://app.sla
 const request = (operation, extra = {}) => ({operation, context, request_id: crypto.randomUUID(), ...extra});
 const approve = entry => ({target: {id: entry.id, revision: entry.revision}});
 
-test("full conflict flow blocks source, holds input, quarantines log and requires fresh input approval", () => {
+test("shared-log deletion is deferred until report approval and then requires a fresh review", () => {
   let state = dispatchPreview(null, request("start_report"));
   state = dispatchPreview(state, request("start_cleanup"));
-  const [source, input, log] = state.cleanup.items;
-  assert.deepEqual(state.cleanup.items.map(i => i.verdict), ["BLOCK", "DEFER", "REVIEW"]);
-  for (const entry of [source, input]) {
-    assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(entry))), {code: "not_reviewable"});
-  }
-  const logApproval = request("approve_cleanup", approve(log));
-  state = dispatchPreview(state, logApproval);
-  const afterLog = structuredClone(state);
-  assert.deepEqual(dispatchPreview(state, request("approve_cleanup", approve(log))), afterLog);
-  assert.deepEqual(dispatchPreview(state, logApproval), afterLog);
+  const [log] = state.cleanup.items;
+  assert.deepEqual(state.cleanup.items.map(i => i.verdict), ["DEFER"]);
+  assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(log))), {code: "not_reviewable"});
   state = dispatchPreview(state, request("approve_report", approve(state.report)));
   assert.equal(state.report.status, "completed");
-  const released = state.cleanup.items[1];
+  const released = state.cleanup.items[0];
   assert.equal(released.verdict, "REVIEW");
-  assert.notEqual(released.id, input.id);
-  assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(input))), {code: "stale_review"});
+  assert.notEqual(released.id, log.id);
+  assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(log))), {code: "stale_review"});
   state = dispatchPreview(state, request("approve_cleanup", approve(released)));
-  assert.equal(state.cleanup.items[1].executed, true);
-  assert.equal(state.cleanup.items[0].verdict, "BLOCK");
+  assert.equal(state.cleanup.items[0].executed, true);
   assert.throws(() => dispatchPreview(state, request("start_report")), {code: "missing_input"});
   assert.equal(Object.keys(publicState(state)).some(key => key.startsWith("_")), false);
 });
 
 test("a newly started report invalidates a previously safe input cleanup", () => {
   let state = dispatchPreview(null, request("start_cleanup"));
-  const old = state.cleanup.items[1];
+  const old = state.cleanup.items[0];
   assert.equal(old.verdict, "REVIEW");
   state = dispatchPreview(state, request("start_report"));
-  assert.equal(state.cleanup.items[1].verdict, "DEFER");
+  assert.equal(state.cleanup.items[0].verdict, "DEFER");
   assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(old))), {code: "stale_review"});
 });
 

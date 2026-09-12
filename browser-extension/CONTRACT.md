@@ -34,10 +34,10 @@ STATE:
  "message":"Ready."
 }
 A report is:
-{"id":"uuid","revision":"uuid","status":"awaiting_approval","input_path":"working/report_input.csv","output_path":"reports/client_update-uuid.md","draft":"reviewable report text"}
+{"id":"uuid","revision":"uuid","status":"awaiting_approval","input_path":"logs/agent_activity.log","output_path":"reports/activity-report-uuid.md","draft":"reviewable report text"}
 Published reports use status "completed".
 A cleanup is:
-{"id":"uuid","items":[{"id":"uuid","revision":"uuid","path":"data/source_metrics.csv","verdict":"BLOCK","reason":"Protected source data.","executed":false}]}
+{"id":"uuid","items":[{"id":"uuid","revision":"uuid","path":"logs/agent_activity.log","verdict":"DEFER","reason":"Report Agent is using the shared log.","executed":false}]}
 Other verdicts: DEFER, REVIEW, ALLOW. Only REVIEW renders an approval button.
 Events: {"id":"uuid","kind":"info","text":"human-readable outcome","at":"ISO timestamp"}; newest last, maximum 20.
 

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "reFlex · Agent Referee",
   "version": "0.1.0",
-  "description": "Review agent conflicts beside Slack. Protect source data, defer active dependencies, and approve safe cleanup.",
+  "description": "Review agent conflicts beside Slack. Defer shared-log deletion until dependent reports are complete.",
   "minimum_chrome_version": "116",
   "permissions": ["sidePanel", "storage"],
   "optional_host_permissions": ["http://127.0.0.1/*"],

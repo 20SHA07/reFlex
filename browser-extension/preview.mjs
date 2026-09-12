@@ -12,6 +12,7 @@ const event = (state, text, kind = "info") => {
   state.message = text;
 };
 const item = (path, verdict, reason) => ({id: id(), revision: id(), path, verdict, reason, executed: false});
+const sharedLog = "logs/agent_activity.log";
 
 export function initialState(context) {
   contextKey(context);
@@ -30,11 +31,8 @@ export function publicState(state) {
 function cleanupItems(state) {
   const active = state.report?.status === "awaiting_approval";
   return [
-    item("data/source_metrics.csv", "BLOCK", "Protected source data. This file cannot be quarantined."),
-    item("working/report_input.csv", !state._inputAvailable ? "BLOCK" : active ? "DEFER" : "REVIEW",
-      !state._inputAvailable ? "Already quarantined in this preview." : active ? "Report Agent still needs this input. Waiting for report approval." : "No active dependency. Review before quarantining."),
-    item("scratch/debug.log", state._debugAvailable ? "REVIEW" : "BLOCK",
-      state._debugAvailable ? "Temporary log with no active dependency. Review before quarantining." : "Already quarantined in this preview."),
+    item(sharedLog, !state._inputAvailable ? "BLOCK" : active ? "DEFER" : "REVIEW",
+      !state._inputAvailable ? "Already quarantined in this preview." : active ? "Report Agent is using this shared log. Deletion is deferred until report approval." : "Report finished. Review the deferred log deletion."),
   ];
 }
 
@@ -63,17 +61,17 @@ export function dispatchPreview(current, request) {
     const reportId = id();
     state.report = {
       id: reportId, revision: id(), status: "awaiting_approval",
-      input_path: "working/report_input.csv", output_path: `reports/client_update-${reportId}.md`,
-      draft: "# Client update\n\nSample report for the referee demo.\n\n- Completed tasks: 18\n- Open tasks: 4\n- Next step: review the remaining tasks with the client.\n\nGenerated from sample data. No model was called.",
+      input_path: sharedLog, output_path: `reports/activity-report-${reportId}.md`,
+      draft: "# Activity report\n\nSample report for the referee demo.\n\nSource: `logs/agent_activity.log`\n\n- Completed tasks: 18\n- Open tasks: 4\n- Next step: review the remaining tasks with the client.\n\nGenerated from shared log data. No model was called.",
     };
     if (state.cleanup) {
-      state.cleanup.items = state.cleanup.items.map(entry => entry.path === "working/report_input.csv" && !entry.executed
-        ? item(entry.path, "DEFER", "Report Agent now needs this input. The previous review is no longer valid.") : entry);
+      state.cleanup.items = state.cleanup.items.map(entry => entry.path === sharedLog && !entry.executed
+        ? item(entry.path, "DEFER", "Report Agent now needs this shared log. The deletion request is no longer valid.") : entry);
     }
-    event(state, "Report Agent reserved its input and prepared a sample draft. Owner approval is required.");
+    event(state, "Report Agent reserved the shared activity log and prepared a sample draft. Cleanup must wait for owner approval.");
   } else if (operation === "start_cleanup") {
     state.cleanup = {id: id(), items: cleanupItems(state)};
-    event(state, "Cleanup reviewed three sample files. Each allowed operation needs its own approval.");
+    event(state, "Cleanup Agent requested deletion. The referee deferred the shared-log request while the report is active.");
   } else {
     if (!target || typeof target.id !== "string" || typeof target.revision !== "string") fail("invalid_request", "Select a stored proposal to approve.");
     const approvalKey = `${operation}:${target.id}:${target.revision}`;
@@ -87,20 +85,19 @@ export function dispatchPreview(current, request) {
       event(state, "Preview: report published and its input dependency released.", "success");
       if (state.cleanup) {
         state.cleanup.items = state.cleanup.items.map(entry => entry.verdict === "DEFER"
-          ? item(entry.path, "REVIEW", "Report completed. This is a fresh cleanup review and needs a new approval.") : entry);
+          ? item(entry.path, "REVIEW", "Report completed. The shared log has a fresh cleanup review and needs approval.") : entry);
       }
     } else {
       const entry = state.cleanup?.items.find(value => value.id === target.id && value.revision === target.revision);
       if (!entry) fail("stale_review", "That cleanup review was replaced. Refresh before approving.");
       if (entry.verdict !== "REVIEW") fail("not_reviewable", "Blocked or deferred actions cannot be approved.");
-      if (entry.path === "working/report_input.csv" && state.report?.status === "awaiting_approval") {
-        fail("dependency_active", "Report Agent still needs this file. Request a fresh review.");
+      if (entry.path === sharedLog && state.report?.status === "awaiting_approval") {
+        fail("dependency_active", "Report Agent still needs the shared log. Request a fresh review.");
       }
       entry.executed = true;
       entry.verdict = "ALLOW";
       entry.reason = "Preview: moved to quarantine. No real file changed.";
-      if (entry.path === "working/report_input.csv") state._inputAvailable = false;
-      if (entry.path === "scratch/debug.log") state._debugAvailable = false;
+      if (entry.path === sharedLog) state._inputAvailable = false;
       event(state, `Preview: ${entry.path} quarantined after approval.`, "success");
     }
     state._approved[approvalKey] = true;

@@ -26,12 +26,12 @@ Slack's desktop application does not load Chrome extensions. Use Slack in Chrome
 
 ## Rehearse the demo
 
-1. Press **Start report**. The report agent holds its working input.
-2. Press **Review cleanup**. Source data is **BLOCK**, the report input is
-   **DEFER**, and the debug log is **REVIEW**.
-3. Approve the debug log's quarantine.
-4. Read the report draft, then approve publication. Its input dependency releases.
-5. The input now has a **fresh** cleanup proposal. Approve it separately.
+1. Press **Start report**. The report agent reserves `logs/agent_activity.log`.
+2. Press **Review cleanup**. The cleanup agent requests deletion of that same
+   log, and the referee returns **DEFER** because the report is still using it.
+3. Read the report draft, then approve publication.
+4. The referee releases the log and creates a **fresh** cleanup review.
+5. Approve that fresh review to move the log to quarantine (never permanent deletion).
 
 Switch Slack channels to see separate review state. Switching channels also
 invalidates the panel's currently displayed controls until context refreshes.

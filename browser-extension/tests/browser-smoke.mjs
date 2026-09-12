@@ -16,7 +16,7 @@ let browser, bridge, fixtureRoot;
 try {
   await mkdir(testExtension);
   const manifest = JSON.parse(await readFile(path.join(extensionDir, "manifest.json"), "utf8"));
-  for (const file of ["background.js", "context.mjs", "preview.mjs", "content.js", "panel.html", "panel.css", "panel.js"]) {
+  for (const file of ["background.js", "context.mjs", "preview.mjs", "ember.js", "slack-adapter.js", "content.js", "panel.html", "panel.css", "panel.js"]) {
     await cp(path.join(extensionDir, file), path.join(testExtension, file));
   }
   manifest.host_permissions = ["http://127.0.0.1/*"];
@@ -54,11 +54,9 @@ try {
   await click("#start-report");
   await panel.waitForFunction(() => !document.querySelector("#report-section").hidden);
   await click("#start-cleanup");
-  await panel.waitForFunction(() => document.querySelectorAll(".cleanup-card").length === 3);
-  assert.deepEqual(await panel.locator(".cleanup-card .status-badge").allTextContents(), ["BLOCK", "DEFER", "REVIEW"]);
-  assert.equal(await panel.locator("[data-cleanup-approval]").count(), 1);
-  await click("[data-cleanup-approval]");
-  await panel.waitForFunction(() => document.querySelectorAll("[data-cleanup-approval]").length === 0);
+  await panel.waitForFunction(() => document.querySelectorAll(".cleanup-card").length === 1);
+  assert.deepEqual(await panel.locator(".cleanup-card .status-badge").allTextContents(), ["DEFER"]);
+  assert.equal(await panel.locator("[data-cleanup-approval]").count(), 0);
   await click("#approve-report");
   await panel.waitForFunction(() => document.querySelector("#report-status").textContent === "Published");
   assert.equal(await panel.locator("[data-cleanup-approval]").count(), 1);
@@ -90,14 +88,13 @@ try {
   await click("#start-report");
   await panel.waitForFunction(() => !document.querySelector("#report-section").hidden);
   await click("#start-cleanup");
-  await panel.waitForFunction(() => document.querySelectorAll(".cleanup-card").length === 3);
-  assert.deepEqual(await panel.locator(".cleanup-card .status-badge").allTextContents(), ["BLOCK", "DEFER", "REVIEW"]);
-  await click("[data-cleanup-approval]");
-  await panel.waitForFunction(() => document.querySelectorAll("[data-cleanup-approval]").length === 0);
+  await panel.waitForFunction(() => document.querySelectorAll(".cleanup-card").length === 1);
+  assert.deepEqual(await panel.locator(".cleanup-card .status-badge").allTextContents(), ["DEFER"]);
+  assert.equal(await panel.locator("[data-cleanup-approval]").count(), 0);
   await click("#approve-report");
   await panel.waitForFunction(() => document.querySelector("#report-status").textContent === "Published");
   await click("[data-cleanup-approval]");
-  await panel.waitForFunction(() => Array.from(document.querySelectorAll(".cleanup-card .status-badge")).filter(el => el.textContent === "Quarantined").length === 2);
+  await panel.waitForFunction(() => Array.from(document.querySelectorAll(".cleanup-card .status-badge")).filter(el => el.textContent === "Quarantined").length === 1);
   await panel.screenshot({path: path.join(repoDir, "artifacts", "browser-local-demo.png"), fullPage: true});
   assert.deepEqual(errors, []);
   console.log("Chromium smoke passed: actual extension, Slack page fixture, channel isolation, and local executor approval flow.");

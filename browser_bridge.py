@@ -35,7 +35,9 @@ MAX_CONTEXTS = 32
 MAX_REQUESTS = 512
 ID_PATTERN = re.compile(r"[A-Z][A-Z0-9]{1,63}\Z")
 PRINCIPAL = {"id": "local-owner", "display_name": "Local demo owner"}
-PATHS = ("data/source_metrics.csv", "working/report_input.csv", "scratch/debug.log")
+# The Slack rehearsal has one intentional conflict: both agents need this log.
+PATHS = ("logs/agent_activity.log",)
+CLEANUP_PATHS = PATHS
 
 
 class BridgeError(Exception):
@@ -69,19 +71,17 @@ def _context(value: object) -> tuple[str, str]:
 class DemoSession:
     def __init__(self, root: Path, key: tuple[str, str]):
         self.workspace = root / "workspace"
-        for folder in ("data", "working", "scratch", "reports"):
+        for folder in ("logs", "reports"):
             (self.workspace / folder).mkdir(parents=True)
         metrics = "day,count\nMonday,12\nTuesday,18\nWednesday,15\n"
         (self.workspace / PATHS[0]).write_text(metrics, encoding="utf-8")
-        (self.workspace / PATHS[1]).write_text(metrics, encoding="utf-8")
-        (self.workspace / PATHS[2]).write_text("Disposable demo debug log.\n", encoding="utf-8")
         self.referee = RefereeService(self.workspace, root / "private_state",
                                       allowed_approver_ids={PRINCIPAL["id"]})
         self.state = {
             "mode": "local-demo", "principal": dict(PRINCIPAL),
             "context": {"workspace_id": key[0], "channel_id": key[1]},
             "report": None, "cleanup": None, "events": [],
-            "message": "Local fixture ready. Start a sample report, then review cleanup.",
+            "message": "Local fixture ready. The report agent will reserve the shared activity log before cleanup requests its deletion.",
         }
         self.requests: dict[str, str] = {}
         self.report_task: str | None = None
@@ -122,28 +122,28 @@ class DemoSession:
     def _build_report(self, text: str) -> None:
         # Register the dependency before reading, using a host-assigned identity.
         task_id = uuid.uuid4().hex
-        self.referee.register_task(task_id, PRINCIPAL["id"], [PATHS[1]])
+        self.referee.register_task(task_id, PRINCIPAL["id"], [PATHS[0]])
         self.report_task = task_id
         # Cleanup might have been reviewed first. Replace its now-outdated
         # eligible input review as soon as the report registers a dependency.
         cleanup = self.state["cleanup"]
         if cleanup:
             for index, item in enumerate(cleanup["items"]):
-                if item["path"] == PATHS[1] and not item["executed"]:
-                    decision = self.referee.evaluate_action("quarantine", PATHS[1],
+                if item["path"] == PATHS[0] and not item["executed"]:
+                    decision = self.referee.evaluate_action("quarantine", PATHS[0],
                         agent_id="sample-cleanup-agent", requested_by_slack_id=PRINCIPAL["id"],
-                        reason="Refresh cleanup after the report reserves its working input.")
+                        reason="Refresh the log-deletion request after the report agent reserves the shared activity log.")
                     cleanup["items"][index] = self.cleanup_item(decision)
-                    self.event("info", "Working-input cleanup now waits for the report. The earlier review has been replaced.")
-        source = self.referee.read_text(PATHS[1])
+                    self.event("info", "Referee deferred the log-deletion request: the report agent still needs the shared activity log.")
+        source = self.referee.read_text(PATHS[0])
         self.report_source_hash = source["sha256"]
         records = list(csv.DictReader(io.StringIO(source["text"])))
         try:
             total = sum(int(row["count"]) for row in records)
         except (KeyError, TypeError, ValueError):
             raise BridgeError("invalid_fixture", "The sample input changed and cannot be summarized.", 409)
-        draft = "# Sample client update\n\nDeterministic local demo, generated without an AI model.\n\n"
-        draft += f"Input: `{PATHS[1]}`\n\n"
+        draft = "# Shared activity log report\n\nDeterministic local demo, generated without an AI model.\n\n"
+        draft += f"Source log: `{PATHS[0]}`\n\n"
         draft += "\n".join(f"- {row['day']}: {row['count']}" for row in records)
         draft += f"\n\nTotal: {total}.\n"
         if text:
@@ -157,24 +157,24 @@ class DemoSession:
             raise BridgeError("report_blocked", "The executor blocked this report. Restart with a fresh fixture.", 409)
         self.state["report"] = {
             "id": decision["action_id"], "revision": _revision([decision["action_id"], source["sha256"], draft]),
-            "status": "awaiting_approval", "input_path": PATHS[1],
+            "status": "awaiting_approval", "input_path": PATHS[0],
             "output_path": output_path, "draft": draft,
         }
-        self.event("info", "Report drafted. Its working input is reserved until the owner approves publication.")
+        self.event("info", "Report agent drafted a report from the shared activity log. The referee reserves that log until publication is approved.")
 
     def start_cleanup(self) -> None:
         previous = {item["path"]: item for item in (self.state["cleanup"] or {}).get("items", [])}
         items = []
-        for path in PATHS:
+        for path in CLEANUP_PATHS:
             if previous.get(path, {}).get("executed"):
                 items.append(previous[path])
                 continue
             decision = self.referee.evaluate_action("quarantine", path,
                 agent_id="sample-cleanup-agent", requested_by_slack_id=PRINCIPAL["id"],
-                reason="Review cleanup of the three fixed disposable demo files.")
+                reason="Cleanup agent requested deletion; the referee uses recoverable quarantine for the disposable demo.")
             items.append(self.cleanup_item(decision))
         self.state["cleanup"] = {"id": uuid.uuid4().hex, "items": items}
-        self.event("info", "Cleanup reviewed. Protected files stay blocked; active inputs wait; eligible files need approval.")
+        self.event("info", "Cleanup agent requested log deletion. The referee checks whether another agent still depends on each file.")
 
     @staticmethod
     def check_target(target: object, stored: dict | None) -> None:
@@ -189,19 +189,19 @@ class DemoSession:
             return
         # A stored draft is only valid for the exact input snapshot it reviewed.
         try:
-            if self.referee.fingerprint(PATHS[1]) != self.report_source_hash:
-                raise BridgeError("stale_review", "The report input changed. Restart the disposable demo to review a fresh report.", 409)
+            if self.referee.fingerprint(PATHS[0]) != self.report_source_hash:
+                raise BridgeError("stale_review", "The shared activity log changed. Restart the disposable demo to review a fresh report.", 409)
         except SafetyError:
-            raise BridgeError("stale_review", "The report input is unavailable. Restart the disposable demo.", 409)
+            raise BridgeError("stale_review", "The shared activity log is unavailable. Restart the disposable demo.", 409)
         result = self.referee.execute_approved_action(report["id"], PRINCIPAL["id"])
         if not result["executed"]:
-            raise BridgeError("execution_blocked", "The executor blocked publication. The input remains reserved.", 409)
+            raise BridgeError("execution_blocked", "The executor blocked publication. The shared activity log remains reserved.", 409)
         published = self.referee.read_text(report["output_path"])
         if published["text"] != report["draft"]:
-            raise BridgeError("publication_changed", "Published output differs from the reviewed report. Its input remains reserved.", 409)
+            raise BridgeError("publication_changed", "Published output differs from the reviewed report. The shared activity log remains reserved.", 409)
         self.referee.complete_task(self.report_task, PRINCIPAL["id"])
         report["status"] = "completed"
-        self.event("success", f"Approved report published to {report['output_path']}. Its input dependency is released.")
+        self.event("success", f"Approved report published to {report['output_path']}. The shared activity log is released for a fresh cleanup review.")
         if result.get("audit_warning"):
             self.event("warning", "The report was published, but its completion journal could not be written. Inspect the local audit files.")
         cleanup = self.state["cleanup"]
