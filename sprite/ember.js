@@ -37,10 +37,10 @@
       types: { accept: { color: '#22a06b', label: '✓' }, reject: { color: '#d92d20', label: '✕' }, defer: { color: '#f0a202', label: '!' } }
     },
     referee: {
-      skinLight: '#fff1df', skinMid: '#f4ad78', uniform: '#1f2937', uniformStripe: '#ffffff', uniformOutline: '#111827', rimLight: '#ffffff', rimDark: '#0f172a', whistle: '#f8fafc',
+      skinLight: '#fff1df', skinMid: '#f4ad78', uniform: '#1f2937', uniformStripe: '#ffffff', uniformOutline: '#111827', rimLight: '#ffffff', rimDark: '#0f172a',
       headRadius: 15, headOffsetY: -10, headOutlineWidth: 2, bodyRadius: 19, bodyOffsetY: 9, bodyOutlineWidth: 2, rimWidth: 3,
       stripeWidth: 4, stripeOffsets: [-8, 0, 8], armWidth: 4, armStartX: 12, armStartY: 4, armReachX: 25, armReachY: -24,
-      whistleRadius: 3, whistleOffsetY: 12, whistleCordWidth: 1, lineCap: 'round'
+      lineCap: 'round'
     },
     face: {
       eyeWhite: '#ffffff', pupil: '#263238', eyeRadius: 3.6, pupilRadius: 1.35, eyeSpacing: 5.8, eyeVerticalOffset: -10,
@@ -486,8 +486,6 @@
       head.addColorStop(constants.zero, referee.skinLight); head.addColorStop(constants.one, referee.skinMid);
       ctx.fillStyle = referee.rimDark; ctx.beginPath(); ctx.arc(state.x, headY, referee.headRadius + referee.headOutlineWidth, constants.zero, constants.tau); ctx.fill();
       ctx.fillStyle = head; ctx.beginPath(); ctx.arc(state.x, headY, referee.headRadius, constants.zero, constants.tau); ctx.fill();
-      ctx.strokeStyle = referee.whistle; ctx.lineWidth = referee.whistleCordWidth; ctx.beginPath(); ctx.moveTo(state.x, headY + referee.whistleOffsetY); ctx.lineTo(state.x, bodyY - referee.bodyRadius / constants.two); ctx.stroke();
-      ctx.fillStyle = referee.whistle; ctx.beginPath(); ctx.arc(state.x, headY + referee.whistleOffsetY, referee.whistleRadius, constants.zero, constants.tau); ctx.fill();
     }
 
     _drawCardArm(ctx, state) {
