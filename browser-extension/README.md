@@ -9,6 +9,9 @@ only trusted, current referee state to it after a dispatch: `BLOCK` presents a
 red card, `DEFER` or `REVIEW` a yellow card, and `ALLOW` a green card. The
 sprite never contacts the bridge or makes approval decisions.
 
+For a visual rehearsal on Slack: `Alt+Shift+E` shows green, `Alt+Shift+W`
+shows yellow, and `Alt+Shift+R` shows red.
+
 ## Load it now
 
 1. Download or check out the `feat/browser-extension` branch of this repository.

@@ -9,6 +9,7 @@
     DEFER: { card: "defer", state: "searching", severity: 2 },
     BLOCK: { card: "reject", state: "certain", severity: 3 },
   };
+  const shortcutVerdicts = { e: "ALLOW", w: "DEFER", r: "BLOCK" };
 
   const pageContext = () => {
     const match = location.pathname.match(/^\/client\/([A-Z0-9]+)\/([A-Z0-9]+)(?:\/|$)/);
@@ -85,6 +86,13 @@
     };
     document.addEventListener("pointermove", forwardPointer, { passive: true });
     document.addEventListener("pointerup", () => ember.handlePointerUp(), { passive: true });
+    document.addEventListener("keydown", (event) => {
+      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return;
+      const verdict = shortcutVerdicts[event.key.toLowerCase()];
+      if (!verdict) return;
+      event.preventDefault();
+      showDecisions([{ verdict }]);
+    });
     updatePerch();
     perchTimer = setInterval(updatePerch, 1500);
     window.addEventListener("resize", updatePerch, { passive: true });

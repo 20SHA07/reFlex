@@ -36,13 +36,24 @@
   document.addEventListener('pointermove', forwardPointer, { passive: true });
   document.addEventListener('pointerup', () => ember.handlePointerUp(), { passive: true });
   const demoVerdicts = [{ verdict: 'ALLOW', path: 'data/source_metrics.csv' }, { verdict: 'DEFER', path: 'working/report_input.csv' }, { verdict: 'BLOCK', path: 'scratch/debug.log' }];
+  const shortcutOutcomes = {
+    e: { state: 'found', card: 'accept' },
+    w: { state: 'searching', card: 'defer' },
+    r: { state: 'certain', card: 'reject' }
+  };
+  const presentShortcutOutcome = async (outcome) => {
+    abortSequence();
+    ember.setState(outcome.state);
+    await ember.presentCard(outcome.card);
+    ember.setState('idle');
+  };
   window.ember = ember;
   window.runChoreography = (verdicts = demoVerdicts) => { proposal = proposal || adapter.getAnyMessage(); return proposal ? startReaction({ id: null, text: '[REFEREE] dev harness' }, verdicts, { demo: true }) : Promise.resolve(false); };
   window.injectFakeRefereeMessage = () => {
     try { const target = adapter.container; if (!target) return false; const fake = document.createElement('div'); fake.setAttribute('role', 'listitem'); fake.dataset.messageId = 'ember-dev-' + Date.now(); fake.style.cssText = 'display:none'; fake.textContent = '[REFEREE] ALLOW:data/source_metrics.csv | DEFER:working/report_input.csv | BLOCK:scratch/debug.log'; target.appendChild(fake); return true; }
     catch (error) { console.debug('[Ember] fake message unavailable:', error); return false; }
   };
-  document.addEventListener('keydown', (event) => { if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return; if (event.key.toLowerCase() === 'e') { event.preventDefault(); window.runChoreography(); } if (event.key.toLowerCase() === 'f') { event.preventDefault(); window.injectFakeRefereeMessage(); } });
+  document.addEventListener('keydown', (event) => { if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return; const outcome = shortcutOutcomes[event.key.toLowerCase()]; if (outcome) { event.preventDefault(); presentShortcutOutcome(outcome); } if (event.key.toLowerCase() === 'f') { event.preventDefault(); window.injectFakeRefereeMessage(); } });
   window.addEventListener('pagehide', () => { abortSequence(); adapter.stop(); window.clearInterval(perchTimer); window.removeEventListener('resize', updateIdlePerch); document.removeEventListener('pointermove', forwardPointer); ember.destroy(); }, { once: true });
   window.__ember = { ember, adapter, host };
 })();

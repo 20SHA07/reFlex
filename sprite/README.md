@@ -27,9 +27,12 @@ runChoreography()
 injectFakeRefereeMessage()
 ```
 
-`Alt+Shift+E` runs the sample choreography. `Alt+Shift+F` injects a fake
+`runChoreography()` runs the sample sequence and `Alt+Shift+F` injects a fake
 referee message. Both are local fallback tools; the extension works without a
 referee backend.
+
+Direct card shortcuts: `Alt+Shift+E` for green, `Alt+Shift+W` for yellow, and
+`Alt+Shift+R` for red.
 
 The referee is a ball that pulls a card for each verdict: `ALLOW` is green,
 `BLOCK` is red, and `DEFER` is yellow. The sample choreography deliberately
