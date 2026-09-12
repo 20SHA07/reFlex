@@ -1,0 +1,2 @@
+/* Only the click-through host lives in document CSS. The sprite is shadowed. */
+#ember-overlay { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; margin: 0; padding: 0; border: 0; }
