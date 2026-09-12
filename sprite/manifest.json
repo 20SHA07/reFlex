@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "The Ember for Slack",
+  "version": "0.2.0",
+  "description": "A click-through Agent Referee sprite for Slack web.",
+  "content_scripts": [{
+    "matches": ["https://app.slack.com/*"],
+    "js": ["ember.js", "slack-adapter.js", "choreography.js", "content.js"],
+    "css": ["styles.css"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }]
+}
