@@ -74,3 +74,53 @@ test("worker requires trusted panel, isolates channel state, and rechecks active
     assert.equal(data.connection, undefined);
   } finally { globalThis.fetch = originalFetch; delete globalThis.chrome; }
 });
+
+test("worker preserves only validated agent metadata across pairing and dispatch", async () => {
+  let handler;
+  const data = {};
+  const context = {workspace_id: "T123", channel_id: "C123", url: "https://app.slack.com/client/T123/C123"};
+  const runtime = {id: "test", getURL: path => `chrome-extension://test/${path}`, onMessage: {addListener(fn) {handler = fn;}}};
+  const principal = {id: "local-owner", display_name: "Local demo owner", unexpected_secret: "keep-private"};
+  let remoteAgent = {provider: "openrouter", model: "google/gemini-2.5-flash", unexpected_secret: "keep-private"};
+  globalThis.chrome = {
+    runtime, sidePanel: {setPanelBehavior: async () => {}},
+    tabs: {query: async () => [{id: 1}], sendMessage: async () => ({ok: true, context})},
+    permissions: {contains: async () => true},
+    storage: {session: {
+      setAccessLevel: async () => {},
+      get: async key => ({[key]: structuredClone(data[key])}),
+      set: async value => Object.assign(data, structuredClone(value)),
+      remove: async key => {delete data[key];},
+    }},
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const session = {mode: "local-demo", principal, ...(remoteAgent === undefined ? {} : {agent: remoteAgent})};
+    return {ok: true, json: async () => url.endsWith("/session")
+      ? {ok: true, ...session}
+      : {ok: true, state: {...session, context, report: null, cleanup: null, events: []}}};
+  };
+  try {
+    await import(`../background.js?metadata=${crypto.randomUUID()}`);
+    const call = message => new Promise(resolve => handler(message, {id: "test", url: runtime.getURL("panel.html")}, resolve));
+    const connected = await call({type: "CONNECT", token: "p".repeat(40)});
+    assert.deepEqual(connected.agent, {provider: "openrouter", model: "google/gemini-2.5-flash"});
+    assert.equal(JSON.stringify(connected).includes("keep-private"), false);
+    assert.equal(JSON.stringify(data.connection).includes("keep-private"), false);
+    assert.deepEqual((await call({type: "GET_CONFIG"})).agent, connected.agent);
+    const status = await call({type: "DISPATCH", operation: "status", context, request_id: crypto.randomUUID()});
+    assert.deepEqual(status.state.agent, connected.agent);
+    assert.equal(JSON.stringify(status).includes("keep-private"), false);
+    assert.deepEqual((await call({type: "GET_CONFIG"})).agent, connected.agent);
+    for (const invalid of [{provider: "unknown", model: "a/b"}, {provider: "openrouter", model: "bad\nmodel"}, {provider: "sample", model: "unexpected"}]) {
+      remoteAgent = invalid;
+      assert.equal((await call({type: "CONNECT", token: "p".repeat(40)})).error.code, "bridge_response");
+      assert.equal((await call({type: "DISPATCH", operation: "status", context, request_id: crypto.randomUUID()})).error.code, "bridge_response");
+    }
+    remoteAgent = undefined;
+    assert.deepEqual((await call({type: "CONNECT", token: "p".repeat(40)})).agent, {provider: "sample", model: null});
+    const disconnected = await call({type: "DISCONNECT"});
+    assert.equal(disconnected.mode, "preview");
+    assert.deepEqual(disconnected.agent, {provider: "sample", model: null});
+  } finally { globalThis.fetch = originalFetch; delete globalThis.chrome; }
+});

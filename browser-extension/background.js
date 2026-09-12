@@ -6,6 +6,21 @@ const operations = new Set(["status", "start_report", "start_cleanup", "approve_
 let pending = Promise.resolve();
 const error = (code, message) => ({ok: false, error: {code, message}});
 
+function agentDescriptor(value) {
+  if (value === undefined || (value?.provider === "sample" && value.model === null)) {
+    return {provider: "sample", model: null};
+  }
+  if (value?.provider === "openrouter" && typeof value.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(value.model)) {
+    return {provider: "openrouter", model: value.model};
+  }
+  return null;
+}
+
+function principalDescriptor(value) {
+  if (typeof value?.id !== "string" || !value.id || value.id.length > 128) return null;
+  return {id: value.id, display_name: typeof value.display_name === "string" ? value.display_name.slice(0, 120) : value.id};
+}
+
 chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
 // Session storage defaults to trusted contexts. Keep it that way explicitly.
 const storageReady = chrome.storage.session.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
@@ -27,8 +42,8 @@ async function activeContext(selection = false) {
 async function config() {
   const {connection} = await chrome.storage.session.get("connection");
   return connection
-    ? {ok: true, mode: "local-demo", principal: connection.principal}
-    : {ok: true, mode: "preview", principal: {id: "preview-owner", display_name: "Preview owner"}};
+    ? {ok: true, mode: "local-demo", principal: principalDescriptor(connection.principal), agent: agentDescriptor(connection.agent)}
+    : {ok: true, mode: "preview", principal: {id: "preview-owner", display_name: "Preview owner"}, agent: agentDescriptor()};
 }
 
 async function bridgeFetch(path, token, body) {
@@ -36,7 +51,7 @@ async function bridgeFetch(path, token, body) {
     const response = await fetch(`${BRIDGE}${path}`, {
       method: body ? "POST" : "GET", credentials: "omit", redirect: "error", cache: "no-store",
       headers: {Authorization: `Bearer ${token}`, ...(body ? {"Content-Type": "application/json"} : {})},
-      ...(body ? {body: JSON.stringify(body)} : {}), signal: AbortSignal.timeout(15000),
+      ...(body ? {body: JSON.stringify(body)} : {}), signal: AbortSignal.timeout(28000),
     });
     const result = await response.json();
     if (typeof result?.ok !== "boolean" || (!response.ok && result.ok)) return error("bridge_response", "The local referee returned an invalid response.");
@@ -61,10 +76,12 @@ async function handle(message) {
       const token = message.token.trim();
       const result = await bridgeFetch("/v1/session", token);
       if (!result.ok) return result;
-      if (result.mode !== "local-demo" || typeof result.principal?.id !== "string") {
+      const principal = principalDescriptor(result.principal);
+      const agent = agentDescriptor(result.agent);
+      if (result.mode !== "local-demo" || !principal || !agent) {
         return error("bridge_response", "This extension needs the local-demo bridge contract.");
       }
-      await chrome.storage.session.set({connection: {token, principal: result.principal}});
+      await chrome.storage.session.set({connection: {token, principal, agent}});
       return config();
     }
     case "DISCONNECT": {
@@ -85,7 +102,17 @@ async function handle(message) {
         ...(message.target ? {target: {id: message.target.id, revision: message.target.revision}} : {}),
       };
       const {connection} = await chrome.storage.session.get("connection");
-      if (connection) return bridgeFetch("/v1/dispatch", connection.token, request);
+      if (connection) {
+        const result = await bridgeFetch("/v1/dispatch", connection.token, request);
+        if (!result.ok) return result;
+        const agent = agentDescriptor(result.state?.agent);
+        const principal = principalDescriptor(result.state?.principal);
+        if (result.state?.mode !== "local-demo" || !agent || !principal) {
+          return error("bridge_response", "The local referee returned invalid session details. Check the bridge and reconnect.");
+        }
+        await chrome.storage.session.set({connection: {token: connection.token, principal, agent}});
+        return {ok: true, state: {...result.state, principal, agent}};
+      }
       const key = `preview:${contextKey(active.context)}`;
       const stored = await chrome.storage.session.get(key);
       try {

@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: node --test browser-extension/tests/*.test.mjs
-      - run: python -m unittest discover -s tests -p 'test_browser_bridge.py' -v
+      - run: python -m unittest discover -s tests -v
       - name: Install browser test dependency
         working-directory: browser-extension
         run: npm install --no-save --package-lock=false playwright

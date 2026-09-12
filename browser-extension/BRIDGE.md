@@ -2,12 +2,15 @@
 
 The browser extension opens beside Slack's website. The bridge below connects
 that interface to `referee_agent/executor.py`, using disposable sample files.
-It does not require a Slack app, Slack bot token, or model API key.
+It does not require a Slack app or Slack bot token. The default offline mode
+needs no model API key. To use the two test agents with real OpenRouter calls,
+follow [OPENROUTER_SETUP.md](../OPENROUTER_SETUP.md).
 
 ## Start the local demo
 
-1. Load `browser-extension/` as an unpacked extension in Chrome's extension
-   developer mode. Copy its 32-letter extension ID from `chrome://extensions`.
+1. Load `browser-extension/` as an unpacked extension in your browser's extension
+   developer mode. Copy its 32-letter extension ID from `edge://extensions` in
+   Edge or `chrome://extensions` in Chrome.
 2. From the repository root, run Python 3.10 or newer:
 
    ```sh
@@ -57,21 +60,23 @@ temporary demo directory manually when finished if desired.
   fixtures. It never takes a production workspace path or a shell command.
 - Its HTTP boundary checks the loopback Host, bearer token, request size, and
   configured extension Origin. Browser-page requests from Slack itself are denied.
-- The report is a **deterministic sample**, not an AI-generated report. Selected
-  request text is quoted in the reviewable draft; it is never executed as a command.
+- Without `--openrouter`, the two agents produce **deterministic samples**. With
+  `--openrouter`, model calls generate the report and cleanup proposal reasons.
+  The sidebar identifies the configured provider/model. Selected request text
+  and demo report data are sent to OpenRouter only when you start an agent.
 - The existing executor protects operations sent through it. This is not an OS
   sandbox and cannot stop unrelated programs from editing files directly.
 - State is single-process and in memory. Restart the bridge for a fresh scenario.
   The append-only audit journal is evidence, not resumable approval state.
 
-The backend teammate can replace the sample report generator with an agent that
-uses provider credentials on the backend. Keep task registration, immutable
-proposals, verified human approval, current hash checks, and controlled execution
-on the trusted backend. Never put OpenRouter or other provider keys in extension
-code or treat text from Slack's DOM as approval identity.
+`test_agents/report_agent.py` and `test_agents/cleanup_agent.py` implement the two
+proposal-only workers. Their provider credentials stay on the backend. Task
+registration, immutable proposals, local owner approval, current hash checks, and
+controlled execution remain with the trusted host. Never put provider keys in
+extension code or treat text from Slack's DOM as approval identity.
 
 Run the bridge checks from the repository root:
 
 ```sh
-python3 -m unittest discover -s tests -p 'test_browser_bridge.py' -v
+python3 -m unittest discover -s tests -v
 ```

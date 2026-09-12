@@ -1,20 +1,22 @@
 # reFlex browser extension for Slack
 
-A Chrome side panel for reviewing agent conflicts while a Slack channel is open.
+A Chromium browser side panel for reviewing agent conflicts while a Slack channel is open.
 The extension uses the current workspace/channel to keep reviews together. It
 imports selected text only when you press **Use selection**.
 
 ## Load it now
 
 1. Download or check out the `feat/browser-extension` branch of this repository.
-2. Open `chrome://extensions` in Chrome 116 or newer and enable **Developer mode**.
+2. Open `edge://extensions` in current Edge, or `chrome://extensions` in Chrome
+   116 or newer, and enable **Developer mode**.
 3. Click **Load unpacked** and select this `browser-extension` directory, the one
    containing `manifest.json`. No JavaScript build or package installation is needed.
 4. Reload Slack's website and open a channel at `https://app.slack.com/client/...`.
-5. Pin **reFlex · Agent Referee** from Chrome's Extensions menu, then click it to
+5. Pin **reFlex · Agent Referee** from your browser's Extensions menu, then click it to
    open the side panel. It starts in **Preview**, with no file changes.
 
-Slack's desktop application does not load Chrome extensions. Use Slack in Chrome.
+Slack's desktop application does not load browser extensions. Use Slack in Edge
+or Chrome. Native Edge opening and permission prompts still need a manual check.
 
 ## Rehearse the demo
 
@@ -32,7 +34,9 @@ An old approval cannot act on the new channel.
 For real file operations, follow [BRIDGE.md](BRIDGE.md). Start the Python bridge,
 copy its pairing token into **Connect local demo**, and allow localhost access.
 The existing executor then operates on newly created disposable sample files.
-No Slack bot token, OpenRouter key, or sponsor offer is needed for this demo.
+No Slack bot token or model key is needed for the offline sample workflow.
+For real OpenRouter calls and a terminal test of both agents, follow
+[OPENROUTER_SETUP.md](../OPENROUTER_SETUP.md). Provider keys stay on the backend.
 
 ## What is implemented
 
@@ -40,8 +44,10 @@ No Slack bot token, OpenRouter key, or sponsor offer is needed for this demo.
 - Per-file decisions, exact draft approval, immutable review IDs, fresh approvals
   after dependency release, activity history, and retry handling.
 - Preview workflow and a paired HTTP bridge to the team's real controlled executor.
-- Fixed sample reports. Connecting your team's model agents is the next backend
-  integration; the sample report is explicitly labelled throughout the interface.
+- Two test agents: Report Agent drafts a client update; Cleanup Agent proposes
+  quarantine of the demo candidates. Both support OpenRouter or offline samples.
+- Model-generated reasons are shown separately from the referee's decision.
+  No model can approve a file operation.
 
 File protection applies to actions routed through the executor. A browser
 extension cannot intercept arbitrary agent shell commands or protect the whole
@@ -65,7 +71,7 @@ From the repository root, with Node 22+ and Python 3.10+:
 
 ```sh
 node --test browser-extension/tests/*.test.mjs
-python3 -m unittest discover -s tests -p 'test_browser_bridge.py' -v
+python3 -m unittest discover -s tests -v
 ```
 
 The GitHub workflow also launches Chromium, loads an extension test copy, serves

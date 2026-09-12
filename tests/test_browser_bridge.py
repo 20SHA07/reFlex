@@ -1,8 +1,12 @@
 """Exercise actual executor effects and the localhost HTTP trust boundary."""
 import http.client
+import argparse
+import copy
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import threading
 import unittest
@@ -10,7 +14,9 @@ import uuid
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from browser_bridge import BridgeError, BridgeServer, BrowserBridge
+from browser_bridge import BridgeError, BridgeServer, BrowserBridge, PATHS, provider_from_args
+from openrouter_agents import OpenRouterError
+from test_agents import CleanupAgent, ReportAgent
 
 
 CONTEXT = {"workspace_id": "T123", "channel_id": "C123", "url": "https://app.slack.com/client/T123/C123"}
@@ -224,6 +230,7 @@ class HttpBoundaryTests(unittest.TestCase):
         status, headers, result = self.request(headers={"Origin": "chrome-extension://" + self.extension_id})
         self.assertEqual(status, 200)
         self.assertEqual(result["principal"]["id"], "local-owner")
+        self.assertEqual(result["agent"], {"provider": "sample", "model": None})
         self.assertNotIn(self.bridge.token, json.dumps(result))
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(headers["Access-Control-Allow-Origin"], "chrome-extension://" + self.extension_id)
@@ -265,6 +272,208 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["state"]["mode"], "local-demo")
         self.assertEqual(result["state"]["report"]["status"], "awaiting_approval")
+
+
+class FakeAgents:
+    """Model stand-in; receives proposal inputs, never execution authority."""
+    model = "test/fake-model"
+    descriptor = {"provider": "openrouter", "model": model}
+
+    def __init__(self):
+        self.calls = []
+        self.report_hook = None
+        self.cleanup_hook = None
+
+    def generate_report(self, **kwargs):
+        self.calls.append(("report", copy.deepcopy(kwargs)))
+        if self.report_hook:
+            return self.report_hook(kwargs)
+        return "# Model-generated client update\n\nThe total is 45.\n"
+
+    def propose_cleanup(self, **kwargs):
+        self.calls.append(("cleanup", copy.deepcopy(kwargs)))
+        if self.cleanup_hook:
+            return self.cleanup_hook(kwargs)
+        return [{"path": item["path"], "operation": "quarantine", "reason": "Model suggestion for referee review."}
+                for item in kwargs["candidates"]]
+
+
+class ModelWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.provider = FakeAgents()
+        self.bridge = BrowserBridge(agent_provider=self.provider)
+        self.addCleanup(shutil.rmtree, self.bridge.root)
+
+    def dispatch(self, operation, **kwargs):
+        return self.bridge.dispatch({"operation": operation, "request_id": uuid.uuid4().hex,
+                                     "context": CONTEXT, **kwargs})["state"]
+
+    def session(self):
+        self.dispatch("status")
+        return self.bridge.sessions[("T123", "C123")]
+
+    def test_two_real_agent_classes_run_and_referee_controls_complete_flow(self):
+        session = self.session()
+        self.assertIsInstance(session.report_agent, ReportAgent)
+        self.assertIsInstance(session.cleanup_agent, CleanupAgent)
+        self.assertEqual(self.provider.calls, [])
+        source_hash = session.referee.fingerprint(PATHS[0])
+        state = self.dispatch("start_report", input={"text": "Explain the weekly counts."})
+        report = state["report"]
+        self.assertEqual(state["agent"], self.provider.descriptor)
+        self.assertEqual(report["draft"], "# Model-generated client update\n\nThe total is 45.\n")
+        self.assertFalse((session.workspace / report["output_path"]).exists())
+        self.assertEqual(self.provider.calls[0][1]["request_text"], "Explain the weekly counts.")
+        cleanup = self.dispatch("start_cleanup", input={"text": "Review cleanup candidates."})["cleanup"]
+        protected, working, debug = cleanup["items"]
+        self.assertEqual([item["verdict"] for item in cleanup["items"]], ["BLOCK", "DEFER", "REVIEW"])
+        self.assertEqual(self.provider.calls[1][1]["request_text"], "Review cleanup candidates.")
+        for candidate in self.provider.calls[1][1]["candidates"]:
+            self.assertEqual(set(candidate), {"path", "size_bytes", "sha256"})
+        self.assertNotEqual(protected["reason"], protected["proposal_reason"])
+        self.assertEqual({action["agent_id"] for action in session.referee.status()["actions"]},
+                         {"report-agent", "cleanup-agent"})
+        self.dispatch("approve_cleanup", target=target(debug))
+        approved = self.dispatch("approve_report", target=target(report))
+        self.assertEqual((session.workspace / report["output_path"]).read_text(), report["draft"])
+        fresh = approved["cleanup"]["items"][1]
+        self.assertEqual(fresh["verdict"], "REVIEW")
+        self.assertNotEqual(fresh["id"], working["id"])
+        self.assertEqual(fresh["proposal_reason"], working["proposal_reason"])
+        with self.assertRaises(BridgeError):
+            self.dispatch("approve_cleanup", target=target(working))
+        self.dispatch("approve_cleanup", target=target(fresh))
+        self.assertEqual(len(self.provider.calls), 2, "Approvals must never regenerate proposals")
+        self.assertEqual(source_hash, session.referee.fingerprint(PATHS[0]))
+
+    def test_dependency_is_registered_before_generation_and_snapshot_stays_bound(self):
+        session = self.session()
+        def change_input(kwargs):
+            self.assertEqual(len(session.referee.status()["active_tasks"]), 1)
+            self.assertIn("Monday,12", kwargs["source_text"])
+            (session.workspace / PATHS[1]).write_text("day,count\nMonday,999\n")
+            return "# Draft based on the original snapshot\n"
+        self.provider.report_hook = change_input
+        report = self.dispatch("start_report")["report"]
+        with self.assertRaises(BridgeError) as stale:
+            self.dispatch("approve_report", target=target(report))
+        self.assertEqual(stale.exception.code, "stale_review")
+        self.assertFalse((session.workspace / report["output_path"]).exists())
+        self.assertEqual(len(session.referee.status()["active_tasks"]), 1)
+
+    def test_cleanup_hash_is_captured_before_generation(self):
+        session = self.session()
+        old_hash = session.referee.fingerprint(PATHS[2])
+        def change_debug(kwargs):
+            self.assertEqual(kwargs["candidates"][2]["sha256"], old_hash)
+            (session.workspace / PATHS[2]).write_text("Changed during model generation")
+            return [{"path": item["path"], "operation": "quarantine", "reason": "Model suggestion."}
+                    for item in kwargs["candidates"]]
+        self.provider.cleanup_hook = change_debug
+        debug = self.dispatch("start_cleanup")["cleanup"]["items"][2]
+        self.assertEqual(debug["verdict"], "BLOCK")
+        with self.assertRaises(BridgeError):
+            self.dispatch("approve_cleanup", target=target(debug))
+        self.assertTrue((session.workspace / PATHS[2]).exists())
+
+    def test_file_missing_before_model_cannot_appear_as_a_fresh_approvable_file(self):
+        session = self.session()
+        (session.workspace / PATHS[2]).unlink()
+        def create_debug(kwargs):
+            self.assertIsNone(kwargs["candidates"][2]["sha256"])
+            (session.workspace / PATHS[2]).write_text("Created during model generation")
+            return [{"path": item["path"], "operation": "quarantine", "reason": "Model suggestion."}
+                    for item in kwargs["candidates"]]
+        self.provider.cleanup_hook = create_debug
+        self.assertEqual(self.dispatch("start_cleanup")["cleanup"]["items"][2]["verdict"], "BLOCK")
+
+    def test_invalid_whole_plan_creates_no_actions_and_preserves_previous_review(self):
+        before = self.dispatch("start_cleanup")
+        session = self.session()
+        actions = session.referee.status()["actions"]
+        def invalid_plan(kwargs):
+            plan = [{"path": item["path"], "operation": "quarantine", "reason": "Model suggestion."}
+                    for item in kwargs["candidates"]]
+            plan[-1]["path"] = "../../important-file"
+            return plan
+        self.provider.cleanup_hook = invalid_plan
+        with self.assertRaises(BridgeError) as rejected:
+            self.dispatch("start_cleanup")
+        self.assertEqual(rejected.exception.code, "provider_invalid_plan")
+        self.assertEqual(session.referee.status()["actions"], actions)
+        self.assertEqual(self.dispatch("status"), before)
+
+    def test_report_provider_failure_holds_input_and_pauses_instead_of_falling_back(self):
+        for code in ("provider_timeout", "provider_refused", "provider_invalid_response"):
+            with self.subTest(code=code):
+                provider = FakeAgents()
+                bridge = BrowserBridge(agent_provider=provider)
+                self.addCleanup(shutil.rmtree, bridge.root)
+                def fail(_kwargs):
+                    raise OpenRouterError(code, "No agent proposal was accepted.")
+                provider.report_hook = fail
+                body = {"operation": "start_report", "context": CONTEXT, "request_id": uuid.uuid4().hex}
+                with self.assertRaises(BridgeError) as failed:
+                    bridge.dispatch(body)
+                self.assertEqual(failed.exception.code, code)
+                self.assertIn("restart", str(failed.exception))
+                session = bridge.sessions[("T123", "C123")]
+                self.assertIsNone(session.state["report"])
+                self.assertEqual(len(session.referee.status()["active_tasks"]), 1)
+                self.assertEqual(session.referee.status()["actions"], [])
+                with self.assertRaises(BridgeError) as paused:
+                    bridge.dispatch({**body, "operation": "start_cleanup", "request_id": uuid.uuid4().hex})
+                self.assertEqual(paused.exception.code, "restart_required")
+
+    def test_cleanup_timeout_does_not_replace_review_or_create_actions(self):
+        before = self.dispatch("start_cleanup")
+        session = self.session()
+        actions = session.referee.status()["actions"]
+        def fail(_kwargs):
+            raise OpenRouterError("provider_timeout", "OpenRouter timed out. No agent proposal was accepted.")
+        self.provider.cleanup_hook = fail
+        with self.assertRaises(BridgeError) as failed:
+            self.dispatch("start_cleanup")
+        self.assertEqual(failed.exception.code, "provider_timeout")
+        self.assertEqual(self.dispatch("status"), before)
+        self.assertEqual(session.referee.status()["actions"], actions)
+
+    def test_malformed_report_from_injected_provider_cannot_be_published(self):
+        self.provider.report_hook = lambda _kwargs: {"draft": "Wrong shape", "approved": True}
+        with self.assertRaises(BridgeError):
+            self.dispatch("start_report")
+        session = self.session()
+        self.assertTrue(session.restart_required)
+        self.assertIsNone(session.state["report"])
+        self.assertEqual(session.referee.status()["actions"], [])
+
+
+class ProviderConfigurationTests(unittest.TestCase):
+    def test_default_stays_offline_even_when_key_is_present(self):
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-private-key"}), patch("browser_bridge.OpenRouterAgents") as provider:
+            self.assertIsNone(provider_from_args(argparse.Namespace(openrouter=False, model=None)))
+            provider.assert_not_called()
+
+    def test_explicit_model_and_environment_key_stay_in_python(self):
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-private-key", "OPENROUTER_MODEL": "test/environment"}), patch("browser_bridge.OpenRouterAgents") as provider:
+            provider_from_args(argparse.Namespace(openrouter=True, model="test/override"))
+            provider.assert_called_once_with(api_key="test-private-key", model="test/override")
+
+    def test_missing_key_noninteractive_fails_before_server_start_without_fallback(self):
+        env = {key: value for key, value in os.environ.items() if key != "OPENROUTER_API_KEY"}
+        result = subprocess.run([sys.executable, "browser_bridge.py", "--openrouter"],
+                                input="", capture_output=True, text=True, timeout=5,
+                                cwd=Path(__file__).resolve().parents[1], env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OPENROUTER_API_KEY is required", result.stderr)
+        self.assertNotIn("Pairing token file", result.stdout)
+        self.assertNotIn("Sample reports", result.stdout)
+
+    def test_interactive_prompt_is_hidden_and_does_not_echo_key(self):
+        with patch.dict(os.environ, {}, clear=True), patch("browser_bridge.sys.stdin.isatty", return_value=True), patch("browser_bridge.getpass.getpass", return_value="test-hidden-key") as prompt, patch("browser_bridge.OpenRouterAgents") as provider:
+            provider_from_args(argparse.Namespace(openrouter=True, model=None))
+            prompt.assert_called_once()
+            self.assertEqual(provider.call_args.kwargs["api_key"], "test-hidden-key")
 
 
 if __name__ == "__main__":

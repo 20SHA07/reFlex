@@ -26,6 +26,11 @@ function showError(error) {
 function clearError() { $("error-box").hidden = true; }
 function status(text) { $("activity-status").textContent = text; }
 function contextKey(value) { return value ? `${value.workspace_id}/${value.channel_id}` : ""; }
+function usesOpenRouter() { return config.mode === "local-demo" && config.agent?.provider === "openrouter"; }
+
+function updateConfigFromState() {
+  if (state?.mode) config = { mode: state.mode, principal: state.principal, agent: state.agent || { provider: "sample", model: null } };
+}
 
 function setControls() {
   const unavailable = busy || refreshing || !context;
@@ -40,12 +45,22 @@ function setControls() {
 
 function renderConfig() {
   const local = config.mode === "local-demo";
-  $("mode-badge").textContent = local ? "Local demo" : "Preview";
+  const openrouter = usesOpenRouter();
+  $("mode-badge").textContent = openrouter ? "OpenRouter" : local ? "Local demo" : "Preview";
   $("mode-badge").classList.toggle("local", local);
   $("mode-notice").classList.toggle("local", local);
-  $("mode-description").textContent = local
+  $("mode-description").textContent = openrouter
+    ? "Local demo: AI agents propose work in a disposable demo folder. The referee checks it; you approve file changes."
+    : local
     ? "Connected to real file operations in a disposable demo folder. The report is a fixed sample, not AI-generated."
     : "Preview uses sample data. No files are changed.";
+  $("agent-description").textContent = openrouter
+    ? `ReportAgent drafts the report. CleanupAgent proposes quarantine. Model: ${config.agent.model}`
+    : local ? "ReportAgent and CleanupAgent use fixed sample logic. No model is connected."
+    : "Sample ReportAgent and CleanupAgent workflow. No model is connected.";
+  $("request-disclosure").textContent = openrouter
+    ? "Starting either agent sends your request text to OpenRouter. ReportAgent also sends demo CSV data; CleanupAgent sends demo file metadata."
+    : "This demo follows a fixed report and cleanup scenario. Nothing is sent to a model.";
   $("principal-name").textContent = config.principal?.display_name || (local ? "Local demo owner" : "Preview owner");
   $("connection-summary").textContent = local ? "Local demo connected" : "Connect local demo";
   $("connection-light").classList.toggle("connected", local);
@@ -94,7 +109,11 @@ function renderResults() {
       const card = node("article", `cleanup-card ${className}`);
       const top = node("div", "section-line");
       top.append(node("p", "file-path", item.path), node("span", `status-badge ${className}`, item.executed ? "Quarantined" : knownVerdict));
-      card.append(top, node("p", "cleanup-reason", item.reason));
+      card.append(top);
+      if (typeof item.proposal_reason === "string" && item.proposal_reason) {
+        card.append(node("p", "cleanup-reason", `Agent proposal: ${item.proposal_reason}`));
+      }
+      card.append(node("p", "cleanup-reason", `Referee: ${item.reason}`));
       if (knownVerdict === "REVIEW" && !item.executed) {
         const button = node("button", "button button-secondary full-width", "Approve quarantine");
         button.type = "button";
@@ -147,7 +166,7 @@ async function refreshContext({ preserveError = false } = {}) {
     const result = await send({ type: "DISPATCH", operation: "status", context, request_id: crypto.randomUUID() });
     if (epoch !== currentEpoch) return;
     state = result.state;
-    if (state?.mode) config = { mode: state.mode, principal: state.principal };
+    updateConfigFromState();
     status(state?.message || "Ready to review.");
   } catch (error) {
     if (epoch !== currentEpoch) return;
@@ -175,13 +194,15 @@ async function dispatch(operation, extra = {}) {
   busy = true;
   clearError();
   setControls();
-  status(operation.startsWith("approve") ? "Checking this approval with the referee…" : "The referee is reviewing the task…");
+  status(operation.startsWith("approve") ? "Checking this approval with the referee…"
+    : usesOpenRouter() ? `${operation === "start_report" ? "ReportAgent is drafting" : "CleanupAgent is proposing quarantine"} with OpenRouter. Waiting for the model and referee…`
+    : "The referee is reviewing the task…");
   let needsRefresh = false;
   try {
     const response = await send({ type: "DISPATCH", operation, context, request_id: crypto.randomUUID(), ...extra });
     if (currentEpoch !== epoch || contextKey(context) !== originalContext) return;
     state = response.state;
-    if (state?.mode) config = { mode: state.mode, principal: state.principal };
+    updateConfigFromState();
     status(state?.message || "Review updated.");
   } catch (error) {
     if (currentEpoch !== epoch) return;

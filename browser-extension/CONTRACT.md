@@ -10,7 +10,12 @@ in chrome.storage.session (trusted extension contexts only). The local service
 authenticates that token to a configured local demo principal, not a Slack identity.
 
 GET /v1/session (Authorization: Bearer token) returns:
-{"ok":true,"principal":{"id":"local-owner","display_name":"Local demo owner"},"mode":"local-demo"}
+{"ok":true,"principal":{"id":"local-owner","display_name":"Local demo owner"},"mode":"local-demo","agent":{"provider":"sample","model":null}}
+
+With OpenRouter configured, `agent` is
+`{"provider":"openrouter","model":"google/gemini-2.5-flash"}` (or the configured
+model ID). This descriptor also appears in STATE and GET_CONFIG. The worker
+validates/copies only provider/model fields and never copies a provider key.
 
 POST /v1/dispatch with the same Authorization header:
 {"operation":"start_report","request_id":"uuid","context":{"workspace_id":"T123","channel_id":"C123","url":"https://app.slack.com/client/T123/C123"},"input":{"text":"optional request"}}
@@ -39,6 +44,8 @@ Published reports use status "completed".
 A cleanup is:
 {"id":"uuid","items":[{"id":"uuid","revision":"uuid","path":"data/source_metrics.csv","verdict":"BLOCK","reason":"Protected source data.","executed":false}]}
 Other verdicts: DEFER, REVIEW, ALLOW. Only REVIEW renders an approval button.
+Local cleanup items also include `proposal_reason`, the agent's suggested reason;
+show it separately from `reason`, the authoritative referee explanation.
 Events: {"id":"uuid","kind":"info","text":"human-readable outcome","at":"ISO timestamp"}; newest last, maximum 20.
 
 Browser service worker message contract, accepted only from panel.html:
@@ -52,6 +59,9 @@ The panel must refresh context on visibility/tab changes and disable actions wit
 Request current status to refresh after stale errors. The UI never auto-approves new proposals.
 Default browser preview stores only sample state in session storage and performs no file operations.
 The local demo bridge uses the real inherited executor on a newly created disposable fixture.
-It generates a deterministic sample report, not an AI report; label it local-demo and explain this.
-OpenRouter integration belongs to the backend team and provider credentials never enter the extension.
+It uses two proposal-only test agents. Default mode generates offline samples.
+With `--openrouter`, the backend sends the selected request and demo report data
+to OpenRouter for a draft, and candidate metadata for cleanup proposals. The
+sidebar identifies provider/model; `local-demo` still means disposable fixtures.
+See ../OPENROUTER_SETUP.md. Provider credentials never enter the extension.
 

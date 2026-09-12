@@ -76,9 +76,11 @@ async function harness({ context = slackContext() } = {}) {
           server.config = {
             mode: local ? "local-demo" : "preview",
             principal: { id: local ? "local-owner" : "preview-owner", display_name: local ? "Local demo owner" : "Preview owner" },
+            ...(local && server.connectAgent ? { agent: structuredClone(server.connectAgent) } : {}),
           };
           server.state.mode = server.config.mode;
           server.state.principal = server.config.principal;
+          server.state.agent = server.config.agent;
           return { ok: true, ...server.config };
         }
         if (server.dispatchOverride) {
@@ -210,4 +212,62 @@ test("pairing requests localhost permission, clears token and labels the actual 
   await elements["disconnect-local"].fire("click");
   assert.equal(elements["mode-badge"].textContent, "Preview");
   assert.equal(elements["principal-name"].textContent, "Preview owner");
+});
+
+test("OpenRouter metadata survives status and action refreshes and discloses transmitted data", async () => {
+  const { elements, server } = await harness();
+  server.connectAgent = { provider: "openrouter", model: "google/gemini-2.5-flash" };
+  elements["pairing-token"].value = "a-local-demo-pairing-token";
+  await elements["connect-form"].fire("submit");
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter");
+  assert.match(elements["mode-description"].textContent, /Local demo.*disposable demo folder/);
+  assert.match(elements["agent-description"].textContent, /ReportAgent.*CleanupAgent.*google\/gemini-2.5-flash/);
+  assert.match(elements["request-disclosure"].textContent, /request text to OpenRouter/);
+  assert.match(elements["request-disclosure"].textContent, /demo CSV data.*demo file metadata/);
+  await elements["refresh-context"].fire("click");
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter");
+  await elements["start-report"].fire("click");
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter");
+  await elements["disconnect-local"].fire("click");
+  assert.equal(elements["mode-badge"].textContent, "Preview");
+  assert.match(elements["request-disclosure"].textContent, /Nothing is sent to a model/);
+});
+
+test("generation waits visibly, renders model proposals as text and never retries a failed generation", async () => {
+  const { elements, server } = await harness();
+  server.connectAgent = { provider: "openrouter", model: "google/gemini-2.5-flash" };
+  elements["pairing-token"].value = "a-local-demo-pairing-token";
+  await elements["connect-form"].fire("submit");
+  let finishGeneration;
+  server.dispatchOverride = (message) => message.operation === "start_cleanup"
+    ? new Promise(resolve => { finishGeneration = resolve; }) : undefined;
+  const request = elements["start-cleanup"].fire("click");
+  assert.match(elements["activity-status"].textContent, /CleanupAgent.*OpenRouter.*Waiting/);
+  assert.equal(elements["start-report"].disabled, true);
+  const proposed = cleanup();
+  proposed.items[0].proposal_reason = "<img src=x onerror=alert(1)> Model says delete it.";
+  finishGeneration({ ok: true, state: { ...server.state, cleanup: proposed } });
+  await request;
+  const protectedCard = elements["cleanup-items"].children[0];
+  assert.equal(protectedCard.children[1].textContent, `Agent proposal: ${proposed.items[0].proposal_reason}`);
+  assert.equal(protectedCard.children[2].textContent, "Referee: Protected source data.");
+  assert.equal(protectedCard.children.some(element => element.tagName === "button"), false);
+  server.dispatchOverride = (message) => message.operation === "start_report"
+    ? { ok: false, error: { code: "provider_unavailable", message: "The model could not respond." } } : undefined;
+  await elements["start-report"].fire("click");
+  assert.equal(server.messages.filter(message => message.operation === "start_report").length, 1);
+  assert.equal(server.messages.at(-1).operation, "status");
+  assert.equal(elements["error-text"].textContent, "The model could not respond.");
+});
+
+test("legacy sample states clear a previous AI label instead of retaining a stale claim", async () => {
+  const { elements, server } = await harness();
+  server.connectAgent = { provider: "openrouter", model: "google/gemini-2.5-flash" };
+  elements["pairing-token"].value = "a-local-demo-pairing-token";
+  await elements["connect-form"].fire("submit");
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter");
+  delete server.state.agent;
+  await elements["refresh-context"].fire("click");
+  assert.equal(elements["mode-badge"].textContent, "Local demo");
+  assert.match(elements["mode-description"].textContent, /not AI-generated/);
 });

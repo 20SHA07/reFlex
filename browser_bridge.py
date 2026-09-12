@@ -2,16 +2,16 @@
 
 This hosts the team's real controlled executor. It neither authenticates a Slack
 user nor attaches to an arbitrary workspace. Every launch creates fresh fixtures.
-Only the locally paired owner can review actions. Reports are deterministic.
+Only the locally paired owner can review actions. Two proposal-only test agents
+can use offline samples or an explicitly configured OpenRouter model.
 """
 from __future__ import annotations
 
 import argparse
 import copy
-import csv
+import getpass
 import hashlib
 import hmac
-import io
 import json
 import os
 from pathlib import Path
@@ -29,6 +29,8 @@ import uuid
 # directory without changing any of the team's files.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "referee_agent"))
 from executor import RefereeService, SafetyError  # noqa: E402
+from openrouter_agents import DEFAULT_MODEL, OpenRouterAgents, OpenRouterError  # noqa: E402
+from test_agents import CleanupAgent, ReportAgent  # noqa: E402
 
 MAX_BODY_BYTES = 16_384
 MAX_CONTEXTS = 32
@@ -67,7 +69,11 @@ def _context(value: object) -> tuple[str, str]:
 
 
 class DemoSession:
-    def __init__(self, root: Path, key: tuple[str, str]):
+    def __init__(self, root: Path, key: tuple[str, str], agent_provider=None):
+        # Workers receive proposal-generation data only, never the executor or
+        # an approval callback. The host assigns both their identities.
+        self.report_agent = ReportAgent(agent_provider)
+        self.cleanup_agent = CleanupAgent(agent_provider)
         self.workspace = root / "workspace"
         for folder in ("data", "working", "scratch", "reports"):
             (self.workspace / folder).mkdir(parents=True)
@@ -79,15 +85,19 @@ class DemoSession:
                                       allowed_approver_ids={PRINCIPAL["id"]})
         self.state = {
             "mode": "local-demo", "principal": dict(PRINCIPAL),
+            "agent": dict(self.report_agent.descriptor),
             "context": {"workspace_id": key[0], "channel_id": key[1]},
             "report": None, "cleanup": None, "events": [],
-            "message": "Local fixture ready. Start a sample report, then review cleanup.",
+            "message": "Local fixture ready. Start the report agent, then review the cleanup agent's proposals.",
         }
         self.requests: dict[str, str] = {}
         self.report_task: str | None = None
         self.report_source_hash: str | None = None
         self.restart_required = False
-        self.event("info", "Connected to a disposable local fixture. Reports use sample data, without an AI model.")
+        if agent_provider is None:
+            self.event("info", "Two test agents connected to disposable files. They use offline samples, without an AI model.")
+        else:
+            self.event("info", "Two OpenRouter test agents connected to disposable files. Start sends request text and demo report data to the configured model.")
 
     def event(self, kind: str, text: str) -> None:
         self.state["events"].append({"id": uuid.uuid4().hex, "kind": kind, "text": text,
@@ -96,12 +106,13 @@ class DemoSession:
         self.state["message"] = text
 
     @staticmethod
-    def cleanup_item(decision: dict) -> dict:
+    def cleanup_item(decision: dict, proposal_reason: str = "") -> dict:
         return {
             "id": decision["action_id"],
             "revision": _revision([decision["action_id"], decision["expected_hash"]]),
             "path": decision["path"], "verdict": decision["verdict"],
             "reason": decision["explanation"], "executed": bool(decision["executed"]),
+            "proposal_reason": proposal_reason,
         }
 
     def start_report(self, text: str) -> None:
@@ -109,6 +120,12 @@ class DemoSession:
             raise BridgeError("report_exists", "This demo already has a report. Review it or restart the bridge for a fresh fixture.", 409)
         try:
             self._build_report(text)
+        except OpenRouterError as exc:
+            # Public provider errors contain no upstream response or credential.
+            self.restart_required = self.report_task is not None
+            message = f"{exc} The input remains reserved and this fixture is paused; restart the bridge for a fresh demo."
+            self.event("warning", message)
+            raise BridgeError(exc.code, message, 502) from exc
         except (BridgeError, SafetyError, OSError, ValueError, KeyError) as exc:
             if self.report_task is not None:
                 # A read/generation failure must not silently release an input
@@ -131,28 +148,18 @@ class DemoSession:
             for index, item in enumerate(cleanup["items"]):
                 if item["path"] == PATHS[1] and not item["executed"]:
                     decision = self.referee.evaluate_action("quarantine", PATHS[1],
-                        agent_id="sample-cleanup-agent", requested_by_slack_id=PRINCIPAL["id"],
+                        agent_id=self.cleanup_agent.agent_id, requested_by_slack_id=PRINCIPAL["id"],
+                        expected_hash=self.referee.fingerprint(PATHS[1]),
                         reason="Refresh cleanup after the report reserves its working input.")
-                    cleanup["items"][index] = self.cleanup_item(decision)
+                    cleanup["items"][index] = self.cleanup_item(decision, item.get("proposal_reason", ""))
                     self.event("info", "Working-input cleanup now waits for the report. The earlier review has been replaced.")
         source = self.referee.read_text(PATHS[1])
         self.report_source_hash = source["sha256"]
-        records = list(csv.DictReader(io.StringIO(source["text"])))
-        try:
-            total = sum(int(row["count"]) for row in records)
-        except (KeyError, TypeError, ValueError):
-            raise BridgeError("invalid_fixture", "The sample input changed and cannot be summarized.", 409)
-        draft = "# Sample client update\n\nDeterministic local demo, generated without an AI model.\n\n"
-        draft += f"Input: `{PATHS[1]}`\n\n"
-        draft += "\n".join(f"- {row['day']}: {row['count']}" for row in records)
-        draft += f"\n\nTotal: {total}.\n"
-        if text:
-            draft += "\nSelected request context (quoted, not executed):\n\n"
-            draft += "\n".join("> " + line for line in text.splitlines()) + "\n"
+        draft = self.report_agent.run(input_path=PATHS[1], source_text=source["text"], request_text=text)
         output_path = f"reports/client_update-{uuid.uuid4().hex}.md"
         decision = self.referee.evaluate_action("create", output_path,
-            agent_id="sample-report-agent", requested_by_slack_id=PRINCIPAL["id"], content=draft,
-            reason="Publish this exact sample report only after local owner review.")
+            agent_id=self.report_agent.agent_id, requested_by_slack_id=PRINCIPAL["id"], content=draft,
+            reason="Publish this exact report draft only after local owner review.")
         if decision["verdict"] != "REVIEW":
             raise BridgeError("report_blocked", "The executor blocked this report. Restart with a fresh fixture.", 409)
         self.state["report"] = {
@@ -162,17 +169,40 @@ class DemoSession:
         }
         self.event("info", "Report drafted. Its working input is reserved until the owner approves publication.")
 
-    def start_cleanup(self) -> None:
-        previous = {item["path"]: item for item in (self.state["cleanup"] or {}).get("items", [])}
-        items = []
+    def start_cleanup(self, text: str = "") -> None:
+        # These metadata snapshots precede model generation. If a file changes
+        # during the call, its original hash still governs review and approval.
+        # Cleanup receives no file bodies or access outside these three paths.
+        candidates = []
         for path in PATHS:
+            try:
+                source = self.referee.read_text(path)
+                candidate = {"path": path, "size_bytes": len(source["text"].encode("utf-8")), "sha256": source["sha256"]}
+            except (SafetyError, OSError, UnicodeError):
+                candidate = {"path": path, "size_bytes": None, "sha256": None}
+            candidates.append(candidate)
+        try:
+            proposals = self.cleanup_agent.run(candidates=copy.deepcopy(candidates), request_text=text)
+        except OpenRouterError as exc:
+            # No evaluate_action call or replacement of a previous review has
+            # happened yet. A failed model request cannot partially apply a plan.
+            raise BridgeError(exc.code, str(exc), 502) from exc
+        previous = {item["path"]: item for item in (self.state["cleanup"] or {}).get("items", [])}
+        by_path = {item["path"]: item for item in proposals}
+        items = []
+        for candidate in candidates:
+            path = candidate["path"]
             if previous.get(path, {}).get("executed"):
                 items.append(previous[path])
                 continue
+            proposal_reason = by_path[path]["reason"]
             decision = self.referee.evaluate_action("quarantine", path,
-                agent_id="sample-cleanup-agent", requested_by_slack_id=PRINCIPAL["id"],
-                reason="Review cleanup of the three fixed disposable demo files.")
-            items.append(self.cleanup_item(decision))
+                agent_id=self.cleanup_agent.agent_id, requested_by_slack_id=PRINCIPAL["id"],
+                # Never pass None here: that would allow the executor to adopt
+                # a file newly created during generation as its original input.
+                expected_hash=candidate["sha256"] or "unavailable-before-generation",
+                reason=proposal_reason)
+            items.append(self.cleanup_item(decision, proposal_reason))
         self.state["cleanup"] = {"id": uuid.uuid4().hex, "items": items}
         self.event("info", "Cleanup reviewed. Protected files stay blocked; active inputs wait; eligible files need approval.")
 
@@ -209,7 +239,7 @@ class DemoSession:
             for index, item in enumerate(cleanup["items"]):
                 if item["verdict"] == "DEFER":
                     fresh = self.referee.reevaluate_action(item["id"])
-                    cleanup["items"][index] = self.cleanup_item(fresh)
+                    cleanup["items"][index] = self.cleanup_item(fresh, item.get("proposal_reason", ""))
                     self.event("info", f"{item['path']} has a fresh {fresh['verdict']} decision. Any eligible cleanup needs a new approval.")
 
     def approve_cleanup(self, target: object) -> None:
@@ -222,7 +252,7 @@ class DemoSession:
         if item["verdict"] != "REVIEW":
             raise BridgeError("approval_unavailable", "This file is blocked or still required by a task. Approval is unavailable.", 409)
         result = self.referee.execute_approved_action(item["id"], PRINCIPAL["id"])
-        item.update(self.cleanup_item(result))
+        item.update(self.cleanup_item(result, item.get("proposal_reason", "")))
         if not result["executed"]:
             self.event("warning", f"Cleanup prevented for {item['path']}. Request a fresh review.")
             raise BridgeError("stale_review", "The executor prevented cleanup. Refresh and request a fresh review.", 409)
@@ -232,7 +262,9 @@ class DemoSession:
 
 
 class BrowserBridge:
-    def __init__(self):
+    def __init__(self, agent_provider=None):
+        self.agent_provider = agent_provider
+        self.agent = dict(agent_provider.descriptor) if agent_provider is not None else {"provider": "sample", "model": None}
         self.root = Path(tempfile.mkdtemp(prefix="reflex_browser_demo_"))
         self.root.chmod(0o700)
         self.token = secrets.token_urlsafe(32)
@@ -273,7 +305,7 @@ class BrowserBridge:
             if session is None:
                 if len(self.sessions) >= MAX_CONTEXTS:
                     raise BridgeError("context_limit", "Restart this demo bridge before adding more channels.", 429)
-                session = DemoSession(self.root / uuid.uuid4().hex, key)
+                session = DemoSession(self.root / uuid.uuid4().hex, key, self.agent_provider)
                 self.sessions[key] = session
             if session.restart_required and operation != "status":
                 raise BridgeError("restart_required", "This fixture is paused after a report failure. Restart the bridge for a fresh demo.", 409)
@@ -289,7 +321,7 @@ class BrowserBridge:
                 if operation == "start_report":
                     session.start_report(text)
                 elif operation == "start_cleanup":
-                    session.start_cleanup()
+                    session.start_cleanup(text)
                 elif operation == "approve_report":
                     session.approve_report(body.get("target"))
                 elif operation == "approve_cleanup":
@@ -379,7 +411,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._boundary()
             if self.path != "/v1/session":
                 raise BridgeError("not_found", "Unknown bridge route.", 404)
-            self._respond(200, {"ok": True, "principal": dict(PRINCIPAL), "mode": "local-demo"})
+            self._respond(200, {"ok": True, "principal": dict(PRINCIPAL), "mode": "local-demo", "agent": dict(self.server.bridge.agent)})
         except BridgeError as exc:
             self._error(exc)
 
@@ -412,16 +444,52 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._error(BridgeError("demo_unavailable", "The local fixture is unavailable. Restart the bridge for a fresh demo.", 503))
 
 
+def provider_from_args(args: argparse.Namespace):
+    """Opt in explicitly; read credentials locally and never accept key flags."""
+    if not args.openrouter:
+        if args.model:
+            raise ValueError("Use --openrouter with --model to enable that model.")
+        return None
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        if not sys.stdin.isatty():
+            raise ValueError("OPENROUTER_API_KEY is required with --openrouter. Set it in the backend environment or start from an interactive terminal for a private prompt.")
+        try:
+            key = getpass.getpass("OpenRouter API key (hidden, backend only): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raise ValueError("OpenRouter key entry cancelled. No backend was started.") from None
+        if not key:
+            raise ValueError("An OpenRouter API key is required. No backend was started.")
+    model = args.model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
+    return OpenRouterAgents(api_key=key, model=model)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--extension-id", help="ID shown in chrome://extensions; permits only that extension Origin.")
+    parser.add_argument("--extension-id", help="ID shown in edge://extensions or chrome://extensions; permits only that extension Origin.")
+    parser.add_argument("--openrouter", action="store_true", help="Run both test agents through OpenRouter instead of offline sample generation.")
+    parser.add_argument("--model", help=f"OpenRouter model ID (or OPENROUTER_MODEL); default: {DEFAULT_MODEL}.")
     args = parser.parse_args()
-    bridge = BrowserBridge()
-    server = BridgeServer(bridge, extension_id=args.extension_id)
+    try:
+        agent_provider = provider_from_args(args)
+        if args.extension_id is not None and not re.fullmatch(r"[a-p]{32}", args.extension_id):
+            raise ValueError("The extension ID must be the 32-letter ID from edge://extensions or chrome://extensions.")
+    except (OpenRouterError, ValueError) as exc:
+        parser.error(str(exc))
+    bridge = BrowserBridge(agent_provider=agent_provider)
+    try:
+        server = BridgeServer(bridge, extension_id=args.extension_id)
+    except OSError:
+        bridge.token_path.unlink(missing_ok=True)
+        parser.error("Cannot start the bridge on 127.0.0.1:8765. Stop any existing bridge, then retry.")
     print("reFlex local demo bridge: http://127.0.0.1:8765", flush=True)
     print(f"Pairing token file (private; copy its contents into extension settings): {bridge.token_path}", flush=True)
     print(f"Disposable fixtures and audit files: {bridge.root}", flush=True)
-    print("Local demo owner only. Slack context is not identity. Sample reports do not use an AI model.", flush=True)
+    if agent_provider is None:
+        print("Local demo owner only. Slack context is not identity. Sample reports do not use an AI model.", flush=True)
+    else:
+        print(f"Local demo owner only. OpenRouter model: {agent_provider.model}. Two test agents propose; the referee and human approve.", flush=True)
+        print("Start sends selected request text and demo report data to OpenRouter. This host only operates on disposable fixtures.", flush=True)
     if not args.extension_id:
         print("If Chrome sends an Origin header, restart with --extension-id YOUR_EXTENSION_ID.", flush=True)
     try:
