@@ -50,7 +50,9 @@ class BoltWiringTests(unittest.TestCase):
         def capture_send(*args, **kwargs):
             responded.set()
 
-        with patch("slack_sdk.webhook.WebhookClient.send", side_effect=capture_send) as send:
+        # Bolt's Respond helper calls send_dict directly, bypassing send.
+        # Patch that boundary so this test never attempts an outbound request.
+        with patch("slack_sdk.webhook.WebhookClient.send_dict", side_effect=capture_send) as send:
             response = app.dispatch(BoltRequest(body=body, mode="socket_mode"))
             self.assertEqual(response.status, 200)
             self.assertTrue(completed.wait(timeout=2), "Registered listener did not reach the backend")
@@ -58,7 +60,9 @@ class BoltWiringTests(unittest.TestCase):
             # request completion is deliberately independent of backend work.
             self.assertTrue(responded.wait(timeout=2), "The listener did not send its status response")
             send.assert_called_once()
-            self.assertIn("preview", send.call_args.kwargs["text"].lower())
+            message = send.call_args.args[0] if send.call_args.args else send.call_args.kwargs["body"]
+            self.assertIn("preview", message["text"].lower())
+            self.assertEqual(message["response_type"], "ephemeral")
 
 
 if __name__ == "__main__":

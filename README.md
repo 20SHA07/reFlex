@@ -4,6 +4,17 @@ This branch contains Person 2's Slack interface for the team's hackathon build.
 The workflow adapter is ready to connect; the repository does not yet include
 the real referee, file executor, or OpenRouter worker agents.
 
+The extension installs into a Slack workspace as a Slack app. Users request work
+and approve actions inside Slack; the Python service handles those interactions
+in the background. This implements the Slack Bolt + Socket Mode path in the
+team's build plan.
+
+The official [Agents, Everywhere starter kit](https://github.com/CopilotKit/agents-everywhere-starter-kit/tree/main/apps/channel)
+also offers a Slack template using TypeScript and managed CopilotKit Channels.
+That is a separate integration path, with its own Channel onboarding and
+credentials. This implementation uses Bolt directly and does not claim to be
+connected to CopilotKit. No starter scenario code was copied into this branch.
+
 Your Slack portion is implemented here: one `/referee` command with `report`,
 `cleanup`, and `status` subcommands; report and cleanup cards; approval buttons;
 message updates; and fresh review cards after report approval.
