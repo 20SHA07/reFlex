@@ -1,0 +1,24 @@
+display_information:
+  name: Agent Referee
+  description: Review agent work, resolve file conflicts, and request human approval.
+  background_color: "#162B45"
+features:
+  bot_user:
+    display_name: Agent Referee
+    always_online: false
+  slash_commands:
+    - command: /referee
+      description: Request a report, review cleanup, or check status
+      usage_hint: "report | cleanup | status"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+settings:
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
