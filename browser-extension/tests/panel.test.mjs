@@ -49,15 +49,15 @@ class Element {
   fire(type, event = { preventDefault() {} }) { return this.listeners[type]?.(event); }
 }
 
-async function harness({ context = slackContext() } = {}) {
+async function harness({ context = slackContext(), mode = "preview", generation = "sample" } = {}) {
   const elements = Object.fromEntries(htmlIds.map((id) => [id, new Element("div")]));
   const created = [];
   const timers = new Map();
   let timerId = 0;
   const server = {
     context,
-    config: { mode: "preview", principal: { id: "preview-owner", display_name: "Preview owner" } },
-    state: { mode: "preview", context, report: null, cleanup: null, events: [], message: "Ready." },
+    config: { mode, generation, principal: { id: "preview-owner", display_name: "Preview owner" } },
+    state: { mode, generation, context, report: null, cleanup: null, events: [], message: "Ready." },
     messages: [], permissions: [], dispatchOverride: null,
   };
   server.state.principal = server.config.principal;
@@ -210,4 +210,25 @@ test("pairing requests localhost permission, clears token and labels the actual 
   await elements["disconnect-local"].fire("click");
   assert.equal(elements["mode-badge"].textContent, "Preview");
   assert.equal(elements["principal-name"].textContent, "Preview owner");
+});
+
+test("live mode labels OpenRouter with sample files and preserves authoritative cleanup controls", async () => {
+  const {elements, server} = await harness({mode: "local-demo", generation: "openrouter"});
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter demo");
+  assert.match(elements["mode-description"].textContent, /Live OpenRouter agents use sample files/);
+  assert.match(elements["request-hint"].textContent, /sends your request and sample project data to OpenRouter/);
+  const explanation = "<img src=x onerror=alert(1)> remains plain explanation text.";
+  server.dispatchOverride = (message) => message.operation === "start_cleanup"
+    ? {ok: true, state: {...server.state, cleanup: {...cleanup(), explanation, explanation_model_used: true}}}
+    : undefined;
+  await elements["start-cleanup"].fire("click");
+  assert.equal(elements["mode-badge"].textContent, "OpenRouter demo");
+  assert.equal(elements["cleanup-explanation-box"].hidden, false);
+  assert.equal(elements["cleanup-explanation-label"].textContent, "AI explanation");
+  assert.equal(elements["cleanup-explanation"].textContent, explanation);
+  const cards = elements["cleanup-items"].children;
+  assert.equal(cards[0].children[1].textContent, "Protected source data.");
+  assert.equal(cards[0].children.length, 2);
+  assert.equal(cards[1].children.length, 2);
+  assert.equal(cards[2].children[2].textContent, "Approve quarantine");
 });

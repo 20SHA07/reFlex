@@ -19,8 +19,12 @@ test("shared-log deletion is deferred until report approval and then requires a 
   assert.equal(released.verdict, "REVIEW");
   assert.notEqual(released.id, log.id);
   assert.throws(() => dispatchPreview(state, request("approve_cleanup", approve(log))), {code: "stale_review"});
-  state = dispatchPreview(state, request("approve_cleanup", approve(released)));
+  const logApproval = request("approve_cleanup", approve(released));
+  state = dispatchPreview(state, logApproval);
   assert.equal(state.cleanup.items[0].executed, true);
+  const afterQuarantine = structuredClone(state);
+  assert.deepEqual(dispatchPreview(state, logApproval), afterQuarantine);
+  assert.deepEqual(dispatchPreview(state, request("approve_cleanup", approve(released))), afterQuarantine);
   assert.throws(() => dispatchPreview(state, request("start_report")), {code: "missing_input"});
   assert.equal(Object.keys(publicState(state)).some(key => key.startsWith("_")), false);
 });

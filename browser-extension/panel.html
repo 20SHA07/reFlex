@@ -31,7 +31,7 @@
         <div class="section-line"><h2 id="request-heading">Give the agents a task</h2><button id="use-selection" class="text-button" type="button" disabled>Use selection</button></div>
         <label class="sr-only" for="request-text">Optional request context</label>
         <textarea id="request-text" rows="3" maxlength="2000" placeholder="Optional context from your conversation…"></textarea>
-        <p class="field-hint">Only text you explicitly select is imported. This demo follows a fixed report and cleanup scenario.</p>
+        <p id="request-hint" class="field-hint">Only text you explicitly select is imported. This demo follows a fixed report and cleanup scenario.</p>
         <div class="action-grid"><button id="start-report" class="button button-primary" type="button" disabled><span aria-hidden="true">↗</span> Start report</button><button id="start-cleanup" class="button button-secondary" type="button" disabled><span aria-hidden="true">≡</span> Review cleanup</button></div>
       </section>
 
@@ -39,7 +39,7 @@
 
       <section id="report-section" class="result-section" aria-labelledby="report-heading" hidden><div class="section-line"><h2 id="report-heading">Report agent</h2><span id="report-status" class="status-badge"></span></div><article class="result-card"><p class="eyebrow">Report draft</p><p id="report-path" class="file-path"></p><p id="report-dependency" class="muted"></p><details id="draft-details"><summary>Read the draft</summary><pre id="report-draft"></pre></details><button id="approve-report" class="button button-primary full-width" type="button">Approve &amp; publish report</button><p id="report-footnote" class="field-hint">Approval publishes this draft and releases its input file.</p></article></section>
 
-      <section id="cleanup-section" class="result-section" aria-labelledby="cleanup-heading" hidden><div class="section-line"><h2 id="cleanup-heading">Cleanup agent</h2><span id="cleanup-count" class="section-count"></span></div><div id="cleanup-items" class="cleanup-items"></div><p class="field-hint">Approved cleanup moves demo files to quarantine. Protected files stay in place.</p></section>
+      <section id="cleanup-section" class="result-section" aria-labelledby="cleanup-heading" hidden><div class="section-line"><h2 id="cleanup-heading">Cleanup agent</h2><span id="cleanup-count" class="section-count"></span></div><div id="cleanup-items" class="cleanup-items"></div><article id="cleanup-explanation-box" class="result-card" hidden><p id="cleanup-explanation-label" class="eyebrow">Decision summary</p><p id="cleanup-explanation" class="cleanup-reason"></p><p class="field-hint">The referee's verdict and reason on each file govern approval.</p></article><p class="field-hint">Approved cleanup moves demo files to quarantine. Protected files stay in place.</p></section>
 
       <section id="events-section" class="result-section" aria-labelledby="events-heading" hidden><div class="section-line"><h2 id="events-heading">Referee activity</h2><span class="section-count">Latest first</span></div><ol id="event-list" class="event-list"></ol></section>
 

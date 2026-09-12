@@ -16,7 +16,7 @@ let browser, bridge, fixtureRoot;
 try {
   await mkdir(testExtension);
   const manifest = JSON.parse(await readFile(path.join(extensionDir, "manifest.json"), "utf8"));
-  for (const file of ["background.js", "context.mjs", "preview.mjs", "ember.js", "slack-adapter.js", "content.js", "panel.html", "panel.css", "panel.js"]) {
+  for (const file of ["background.js", "bridge.mjs", "context.mjs", "preview.mjs", "ember.js", "slack-adapter.js", "content.js", "panel.html", "panel.css", "panel.js"]) {
     await cp(path.join(extensionDir, file), path.join(testExtension, file));
   }
   manifest.host_permissions = ["http://127.0.0.1/*"];

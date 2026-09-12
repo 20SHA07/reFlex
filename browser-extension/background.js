@@ -1,7 +1,8 @@
 import {contextKey, parseContext, sameContext, panelSender} from "./context.mjs";
 import {dispatchPreview, initialState, publicState} from "./preview.mjs";
+import {createBridgeClient, BRIDGE_JOB_TIMEOUT_MS} from "./bridge.mjs";
 
-const BRIDGE = "http://127.0.0.1:8765";
+const bridge = createBridgeClient();
 const operations = new Set(["status", "start_report", "start_cleanup", "approve_report", "approve_cleanup"]);
 let pending = Promise.resolve();
 const error = (code, message) => ({ok: false, error: {code, message}});
@@ -36,26 +37,11 @@ async function publishSpriteState(tabId, context, result) {
 async function config() {
   const {connection} = await chrome.storage.session.get("connection");
   return connection
-    ? {ok: true, mode: "local-demo", principal: connection.principal}
+    ? {ok: true, mode: "local-demo", generation: connection.generation || "sample", principal: connection.principal}
     : {ok: true, mode: "preview", principal: {id: "preview-owner", display_name: "Preview owner"}};
 }
 
-async function bridgeFetch(path, token, body) {
-  try {
-    const response = await fetch(`${BRIDGE}${path}`, {
-      method: body ? "POST" : "GET", credentials: "omit", redirect: "error", cache: "no-store",
-      headers: {Authorization: `Bearer ${token}`, ...(body ? {"Content-Type": "application/json"} : {})},
-      ...(body ? {body: JSON.stringify(body)} : {}), signal: AbortSignal.timeout(15000),
-    });
-    const result = await response.json();
-    if (typeof result?.ok !== "boolean" || (!response.ok && result.ok)) return error("bridge_response", "The local referee returned an invalid response.");
-    return result;
-  } catch {
-    return error("bridge_unavailable", "Cannot confirm the local referee's response. Check browser_bridge.py and pairing, then refresh to see whether the action completed before retrying.");
-  }
-}
-
-async function handle(message) {
+async function handle(message, deadline) {
   await storageReady;
   switch (message?.type) {
     case "GET_CONTEXT": {
@@ -71,12 +57,12 @@ async function handle(message) {
         return error("invalid_token", "Paste the pairing token created by your local referee.");
       }
       const token = message.token.trim();
-      const result = await bridgeFetch("/v1/session", token);
+      const result = await bridge.session(token);
       if (!result.ok) return result;
       if (result.mode !== "local-demo" || typeof result.principal?.id !== "string") {
         return error("bridge_response", "This extension needs the local-demo bridge contract.");
       }
-      await chrome.storage.session.set({connection: {token, principal: result.principal}});
+      await chrome.storage.session.set({connection: {token, principal: result.principal, generation: result.generation === "openrouter" ? "openrouter" : "sample"}});
       return config();
     }
     case "DISCONNECT": {
@@ -98,7 +84,7 @@ async function handle(message) {
       };
       const {connection} = await chrome.storage.session.get("connection");
       if (connection) {
-        const result = await bridgeFetch("/v1/dispatch", connection.token, request);
+        const result = await bridge.dispatch(connection.token, request, deadline);
         await publishSpriteState(active.tabId, active.context, result);
         return result;
       }
@@ -121,7 +107,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     respond(error("untrusted_sender", "Use the reFlex extension panel for this action."));
     return false;
   }
-  const task = pending.then(() => handle(message));
+  // Include queue time so a refresh behind an AI job cannot hold its own
+  // service-worker message open for another four minutes.
+  const deadline = Date.now() + BRIDGE_JOB_TIMEOUT_MS;
+  const task = pending.then(() => handle(message, deadline));
   pending = task.catch(() => {});
   task.then(respond).catch(() => respond(error("extension_error", "The extension could not finish this request. Refresh and try again.")));
   return true;

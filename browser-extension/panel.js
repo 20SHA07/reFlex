@@ -40,14 +40,19 @@ function setControls() {
 
 function renderConfig() {
   const local = config.mode === "local-demo";
-  $("mode-badge").textContent = local ? "Local demo" : "Preview";
+  const live = local && config.generation === "openrouter";
+  $("mode-badge").textContent = live ? "OpenRouter demo" : local ? "Local demo" : "Preview";
   $("mode-badge").classList.toggle("local", local);
   $("mode-notice").classList.toggle("local", local);
-  $("mode-description").textContent = local
-    ? "Connected to real file operations in a disposable demo folder. The report is a fixed sample, not AI-generated."
+  $("mode-description").textContent = live
+    ? "Live OpenRouter agents use sample files in a disposable demo folder. Approved actions change those demo files."
+    : local ? "Connected to real file operations in a disposable demo folder. The report is a fixed sample, not AI-generated."
     : "Preview uses sample data. No files are changed.";
+  $("request-hint").textContent = live
+    ? "Use selection imports only the text you select. Starting a task sends your request and sample project data to OpenRouter."
+    : "Only text you explicitly select is imported. This demo follows a fixed report and cleanup scenario.";
   $("principal-name").textContent = config.principal?.display_name || (local ? "Local demo owner" : "Preview owner");
-  $("connection-summary").textContent = local ? "Local demo connected" : "Connect local demo";
+  $("connection-summary").textContent = live ? "OpenRouter demo connected" : local ? "Local demo connected" : "Connect local demo";
   $("connection-light").classList.toggle("connected", local);
   $("connect-form").hidden = local;
   $("disconnect-local").hidden = !local;
@@ -84,6 +89,10 @@ function renderResults() {
       : "Approval publishes this draft and releases its input file.";
   }
   $("cleanup-section").hidden = !cleanup;
+  const explanation = typeof cleanup?.explanation === "string" ? cleanup.explanation : "";
+  $("cleanup-explanation-box").hidden = !explanation;
+  $("cleanup-explanation-label").textContent = cleanup?.explanation_model_used ? "AI explanation" : "Decision summary";
+  $("cleanup-explanation").textContent = explanation;
   $("cleanup-items").replaceChildren();
   if (cleanup) {
     const items = Array.isArray(cleanup.items) ? cleanup.items : [];
@@ -147,7 +156,7 @@ async function refreshContext({ preserveError = false } = {}) {
     const result = await send({ type: "DISPATCH", operation: "status", context, request_id: crypto.randomUUID() });
     if (epoch !== currentEpoch) return;
     state = result.state;
-    if (state?.mode) config = { mode: state.mode, principal: state.principal };
+    if (state?.mode) config = { mode: state.mode, generation: state.generation, principal: state.principal };
     status(state?.message || "Ready to review.");
   } catch (error) {
     if (epoch !== currentEpoch) return;
@@ -175,13 +184,15 @@ async function dispatch(operation, extra = {}) {
   busy = true;
   clearError();
   setControls();
-  status(operation.startsWith("approve") ? "Checking this approval with the referee…" : "The referee is reviewing the task…");
+  status(operation.startsWith("approve") ? "Checking this approval with the referee…"
+    : config.generation === "openrouter" ? "The AI agents are working with the referee. This can take a few minutes…"
+    : "The referee is reviewing the task…");
   let needsRefresh = false;
   try {
     const response = await send({ type: "DISPATCH", operation, context, request_id: crypto.randomUUID(), ...extra });
     if (currentEpoch !== epoch || contextKey(context) !== originalContext) return;
     state = response.state;
-    if (state?.mode) config = { mode: state.mode, principal: state.principal };
+    if (state?.mode) config = { mode: state.mode, generation: state.generation, principal: state.principal };
     status(state?.message || "Review updated.");
   } catch (error) {
     if (currentEpoch !== epoch) return;

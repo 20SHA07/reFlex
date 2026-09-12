@@ -2,16 +2,16 @@
 
 The browser extension opens beside Slack's website. The bridge below connects
 that interface to `referee_agent/executor.py`, using disposable sample files.
-The current `main` demo uses deterministic samples and needs no Slack app, Slack
-bot token, or model API key. OpenRouter is a separate feature-branch flow; follow
-[its setup guide](https://github.com/20SHA07/reFlex/blob/feat/browser-extension/OPENROUTER_SETUP.md)
-when using that branch.
+The default sample mode does not require a Slack app, Slack bot token, or model
+API key. For live Report and Cleanup agents, use `browser_bridge.py --live`
+with the same extension ID. Follow the [Windows OpenRouter setup](../AI_AGENTS.md)
+first; the provider key stays in Python, and the extension uses a separate
+local pairing token.
 
 ## Start the local demo
 
-1. Load `browser-extension/` from `main` as an unpacked extension with Developer
-   mode enabled. Copy the 32-letter ID from the **reFlex · Agent Referee** card
-   at `edge://extensions` in Edge or `chrome://extensions` in Chrome.
+1. Load `browser-extension/` as an unpacked extension in Chrome's extension
+   developer mode. Copy its 32-letter extension ID from `chrome://extensions`.
 2. From the repository root, run Python 3.10 or newer:
 
    ```sh
@@ -59,22 +59,23 @@ temporary demo directory manually when finished if desired.
   fixtures. It never takes a production workspace path or a shell command.
 - Its HTTP boundary checks the loopback Host, bearer token, request size, and
   configured extension Origin. Browser-page requests from Slack itself are denied.
-- The report is a **deterministic sample**, not an AI-generated report. Selected
-  request text is quoted in the reviewable draft; it is never executed as a command.
+- Default reports are **deterministic samples**. With `--live`, OpenRouter drafts
+  from the sample input and selected request text. The panel labels that mode,
+  and approval is still required before publication. Selected text never grants
+  file permissions or becomes a shell command.
 - The existing executor protects operations sent through it. This is not an OS
   sandbox and cannot stop unrelated programs from editing files directly.
 - State is single-process and in memory. Restart the bridge for a fresh scenario.
   The append-only audit journal is evidence, not resumable approval state.
 
-The backend teammate can replace the sample report generator with an agent that
-uses provider credentials on the backend. Keep task registration, immutable
-proposals, verified human approval, current hash checks, and controlled execution
-on the trusted backend. Never put OpenRouter or other provider keys in extension
-code or treat text from Slack's DOM as approval identity.
+The optional backend agent integration is implemented in `agents.py` and
+`prompts/`. Live requests run as jobs so the panel can poll without holding a
+long HTTP request open. Task registration, immutable proposals, local owner
+approval, hash checks, and execution remain on the backend. Never put provider
+keys in extension code or treat Slack DOM text as approval identity.
 
 Run the bridge checks from the repository root:
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_browser_bridge.py' -v
 ```
-

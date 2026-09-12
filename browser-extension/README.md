@@ -1,6 +1,6 @@
 # reFlex browser extension for Slack
 
-An Edge/Chrome side panel for reviewing agent conflicts while a Slack channel is open.
+A Chrome side panel for reviewing agent conflicts while a Slack channel is open.
 The extension uses the current workspace/channel to keep reviews together. It
 imports selected text only when you press **Use selection**.
 
@@ -14,18 +14,16 @@ shows yellow, and `Alt+Shift+R` shows red.
 
 ## Load it now
 
-1. Download or check out `main` for the integrated shared-log and sprite demo.
-2. Open `edge://extensions` in current Edge or `chrome://extensions` in Chrome
-   116 or newer and enable **Developer mode**.
+1. Use the `browser-extension` folder from the same project version as your
+   `browser_bridge.py` backend.
+2. Open `chrome://extensions` in Chrome 116 or newer and enable **Developer mode**.
 3. Click **Load unpacked** and select this `browser-extension` directory, the one
    containing `manifest.json`. No JavaScript build or package installation is needed.
 4. Reload Slack's website and open a channel at `https://app.slack.com/client/...`.
-5. Pin **reFlex · Agent Referee** from your browser's Extensions menu, then click it to
+5. Pin **reFlex · Agent Referee** from Chrome's Extensions menu, then click it to
    open the side panel. It starts in **Preview**, with no file changes.
 
-Slack's desktop application does not load browser extensions. Use Slack in Edge
-or Chrome. This folder already includes the sprite; disable a separate standalone
-**The Ember for Slack** installation to avoid duplicate overlays.
+Slack's desktop application does not load Chrome extensions. Use Slack in Chrome.
 
 ## Rehearse the demo
 
@@ -43,7 +41,11 @@ An old approval cannot act on the new channel.
 For real file operations, follow [BRIDGE.md](BRIDGE.md). Start the Python bridge,
 copy its pairing token into **Connect local demo**, and allow localhost access.
 The existing executor then operates on newly created disposable sample files.
-No Slack bot token, OpenRouter key, or sponsor offer is needed for this demo.
+No Slack bot token or OpenRouter key is needed for the default sample mode.
+Live model mode additionally needs an OpenRouter key in the Python backend.
+Both connected modes use the same disposable `logs/agent_activity.log` scenario.
+The **OpenRouter demo** badge means the agents call a real model; **Local demo**
+uses a fixed report. The provider key belongs only in the Python environment.
 
 ## What is implemented
 
@@ -51,10 +53,9 @@ No Slack bot token, OpenRouter key, or sponsor offer is needed for this demo.
 - Per-file decisions, exact draft approval, immutable review IDs, fresh approvals
   after dependency release, activity history, and retry handling.
 - Preview workflow and a paired HTTP bridge to the team's real controlled executor.
-- Fixed sample reports on `main`, explicitly labelled in the interface. For the
-  separate OpenRouter three-file scenario, use the feature branch's
-  [setup guide](https://github.com/20SHA07/reFlex/blob/feat/browser-extension/OPENROUTER_SETUP.md).
-  The main bridge does not accept `--openrouter`.
+- Fixed sample reports by default, or backend OpenRouter Report and Cleanup
+  agents with `--live`. The panel identifies the active mode. See the
+  [Windows AI setup](../AI_AGENTS.md) for the key, commands, and diagnostics.
 
 File protection applies to actions routed through the executor. A browser
 extension cannot intercept arbitrary agent shell commands or protect the whole
@@ -99,4 +100,3 @@ node tests/browser-smoke.mjs
 
 Close the manual bridge first so the test can use port 8765. Screenshot artifacts
 show the preview and local demo. Test dependencies are not needed by the extension.
-

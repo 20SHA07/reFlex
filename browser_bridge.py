@@ -2,7 +2,8 @@
 
 This hosts the team's real controlled executor. It neither authenticates a Slack
 user nor attaches to an arbitrary workspace. Every launch creates fresh fixtures.
-Only the locally paired owner can review actions. Reports are deterministic.
+Only the locally paired owner can review actions. Reports are deterministic by
+default; --live calls backend OpenRouter agents on the same disposable fixtures.
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ from executor import RefereeService, SafetyError  # noqa: E402
 MAX_BODY_BYTES = 16_384
 MAX_CONTEXTS = 32
 MAX_REQUESTS = 512
+MAX_PENDING_JOBS = 16
+MAX_RETAINED_JOBS = 512
 ID_PATTERN = re.compile(r"[A-Z][A-Z0-9]{1,63}\Z")
 PRINCIPAL = {"id": "local-owner", "display_name": "Local demo owner"}
 # The Slack rehearsal has one intentional conflict: both agents need this log.
@@ -69,7 +72,10 @@ def _context(value: object) -> tuple[str, str]:
 
 
 class DemoSession:
-    def __init__(self, root: Path, key: tuple[str, str]):
+    def __init__(self, root: Path, key: tuple[str, str], *, ai_agents=None,
+                 fault_injection: bool = False):
+        self.ai_agents = ai_agents
+        self.fault_injection = fault_injection
         self.workspace = root / "workspace"
         for folder in ("logs", "reports"):
             (self.workspace / folder).mkdir(parents=True)
@@ -79,6 +85,7 @@ class DemoSession:
                                       allowed_approver_ids={PRINCIPAL["id"]})
         self.state = {
             "mode": "local-demo", "principal": dict(PRINCIPAL),
+            "generation": "openrouter" if ai_agents is not None else "sample",
             "context": {"workspace_id": key[0], "channel_id": key[1]},
             "report": None, "cleanup": None, "events": [],
             "message": "Local fixture ready. The report agent will reserve the shared activity log before cleanup requests its deletion.",
@@ -87,7 +94,12 @@ class DemoSession:
         self.report_task: str | None = None
         self.report_source_hash: str | None = None
         self.restart_required = False
-        self.event("info", "Connected to a disposable local fixture. Reports use sample data, without an AI model.")
+        if ai_agents is None:
+            self.event("info", "Connected to a disposable local fixture. Reports use sample data, without an AI model.")
+        else:
+            self.event("info", "Connected to OpenRouter agents using disposable sample files. File changes still need your approval.")
+            if fault_injection:
+                self.event("warning", "Fault injection is enabled: cleanup candidates are fixed demonstration inputs, not an AI selection.")
 
     def event(self, kind: str, text: str) -> None:
         self.state["events"].append({"id": uuid.uuid4().hex, "kind": kind, "text": text,
@@ -102,7 +114,46 @@ class DemoSession:
             "revision": _revision([decision["action_id"], decision["expected_hash"]]),
             "path": decision["path"], "verdict": decision["verdict"],
             "reason": decision["explanation"], "executed": bool(decision["executed"]),
+            "dependency_task_id": decision.get("blocking_task_id"),
         }
+
+    def _refresh_cleanup_explanation(self, *, use_model: bool = False) -> None:
+        """Explanations are commentary; the executor's item decisions stay intact."""
+        cleanup = self.state["cleanup"]
+        if cleanup is None:
+            return
+        items = cleanup["items"]
+        pending = [item for item in items if not item["executed"]]
+        completed_lines = [f"{item['path']}: {item['verdict']} (already quarantined) — {item['reason']}"
+                           for item in items if item["executed"]]
+        pending_lines = [f"{item['path']}: {item['verdict']} — {item['reason']}" for item in pending]
+        text = "\n".join(pending_lines + completed_lines)
+        if not items:
+            text = "No cleanup actions were proposed. No files were changed."
+        elif not pending:
+            text = "No pending cleanup actions remain.\n" + text
+        cleanup.update(explanation=text, explanation_model_used=False, explanation_error=False)
+        if not use_model or self.ai_agents is None or not pending:
+            return
+        try:
+            from agents import VerifiedDecision
+            rows = [VerifiedDecision(path=item["path"], decision=item["verdict"],
+                        reason=item["reason"], dependency_task_id=item.get("dependency_task_id"))
+                    for item in pending]
+            explanation = self.ai_agents.explain_cleanup(rows)
+            if not isinstance(explanation.text, str) or not explanation.text.strip():
+                raise ValueError("Empty explanation")
+            if explanation.model_used and not explanation.error:
+                cleanup["explanation"] = "\n".join([explanation.text, *completed_lines])
+                cleanup["explanation_model_used"] = True
+                self.event("info", "AI explanation added. The referee's individual decisions remain authoritative.")
+                return
+        except Exception:
+            # Provider responses and exceptions can contain sensitive material.
+            # Keep the trusted fallback and never echo exception details.
+            pass
+        cleanup["explanation_error"] = True
+        self.event("warning", "AI explanation unavailable. Showing the referee's current rule explanations instead.")
 
     def start_report(self, text: str) -> None:
         if self.state["report"] is not None:
@@ -135,24 +186,39 @@ class DemoSession:
                         reason="Refresh the log-deletion request after the report agent reserves the shared activity log.")
                     cleanup["items"][index] = self.cleanup_item(decision)
                     self.event("info", "Referee deferred the log-deletion request: the report agent still needs the shared activity log.")
+            self._refresh_cleanup_explanation()
         source = self.referee.read_text(PATHS[0])
         self.report_source_hash = source["sha256"]
-        records = list(csv.DictReader(io.StringIO(source["text"])))
-        try:
-            total = sum(int(row["count"]) for row in records)
-        except (KeyError, TypeError, ValueError):
-            raise BridgeError("invalid_fixture", "The sample input changed and cannot be summarized.", 409)
-        draft = "# Shared activity log report\n\nDeterministic local demo, generated without an AI model.\n\n"
-        draft += f"Source log: `{PATHS[0]}`\n\n"
-        draft += "\n".join(f"- {row['day']}: {row['count']}" for row in records)
-        draft += f"\n\nTotal: {total}.\n"
-        if text:
-            draft += "\nSelected request context (quoted, not executed):\n\n"
-            draft += "\n".join("> " + line for line in text.splitlines()) + "\n"
         output_path = f"reports/client_update-{uuid.uuid4().hex}.md"
+        if self.ai_agents is None:
+            records = list(csv.DictReader(io.StringIO(source["text"])))
+            try:
+                total = sum(int(row["count"]) for row in records)
+            except (KeyError, TypeError, ValueError):
+                raise BridgeError("invalid_fixture", "The sample input changed and cannot be summarized.", 409)
+            draft = "# Shared activity log report\n\nDeterministic local demo, generated without an AI model.\n\n"
+            draft += f"Source log: `{PATHS[0]}`\n\n"
+            draft += "\n".join(f"- {row['day']}: {row['count']}" for row in records)
+            draft += f"\n\nTotal: {total}.\n"
+            if text:
+                draft += "\nSelected request context (quoted, not executed):\n\n"
+                draft += "\n".join("> " + line for line in text.splitlines()) + "\n"
+        else:
+            try:
+                report = self.ai_agents.run_report(task_id, input_path=PATHS[0],
+                    input_text=source["text"], output_path=output_path, request_text=text)
+                draft = report.markdown
+                if (report.task_id != task_id or report.input_path != PATHS[0]
+                        or report.output_path != output_path or not isinstance(draft, str)
+                        or not draft.strip() or len(draft) > 16000
+                        or len(draft.encode("utf-8")) > self.referee.max_file_bytes):
+                    raise ValueError("Agent report does not match the host-assigned task")
+            except Exception as exc:
+                raise BridgeError("agent_unavailable", "The AI report could not be generated. Check your backend OpenRouter settings and credits.", 502) from exc
         decision = self.referee.evaluate_action("create", output_path,
-            agent_id="sample-report-agent", requested_by_slack_id=PRINCIPAL["id"], content=draft,
-            reason="Publish this exact sample report only after local owner review.")
+            agent_id="report-agent" if self.ai_agents is not None else "sample-report-agent",
+            requested_by_slack_id=PRINCIPAL["id"], content=draft,
+            reason="Publish this exact report only after local owner review.")
         if decision["verdict"] != "REVIEW":
             raise BridgeError("report_blocked", "The executor blocked this report. Restart with a fresh fixture.", 409)
         self.state["report"] = {
@@ -164,17 +230,49 @@ class DemoSession:
 
     def start_cleanup(self) -> None:
         previous = {item["path"]: item for item in (self.state["cleanup"] or {}).get("items", [])}
+        paths = list(CLEANUP_PATHS)
+        hashes = {}
+        reason = "Cleanup agent requested deletion; the referee uses recoverable quarantine for the disposable demo."
+        proposal_source = "sample"
+        if self.ai_agents is not None:
+            # Capture versions before the model considers the host-scoped paths.
+            # Never register model-chosen identities or accept arbitrary paths.
+            inventory = [path for path in CLEANUP_PATHS if not previous.get(path, {}).get("executed")]
+            hashes = {path: self.referee.fingerprint(path) for path in inventory}
+            try:
+                cleanup_task_id = uuid.uuid4().hex
+                proposal = self.ai_agents.run_cleanup(cleanup_task_id, inventory,
+                                                       fault_injection=self.fault_injection)
+                paths = proposal.paths
+                reason = proposal.reason
+                if (proposal.task_id != cleanup_task_id
+                        or not isinstance(paths, (tuple, list)) or len(paths) > len(inventory)
+                        or any(not isinstance(path, str) or path not in inventory for path in paths)
+                        or len(set(paths)) != len(paths)
+                        or not isinstance(reason, str) or not reason.strip() or len(reason) > 1000):
+                    raise ValueError("Invalid cleanup proposal")
+                proposal_source = "fault_injection" if self.fault_injection else "model"
+            except Exception as exc:
+                # No proposal has been evaluated or stored when generation fails.
+                raise BridgeError("agent_unavailable", "The AI cleanup plan could not be generated. No new cleanup actions were submitted. Check your backend OpenRouter settings and try again.", 502) from exc
         items = []
-        for path in CLEANUP_PATHS:
+        for path in paths:
             if previous.get(path, {}).get("executed"):
                 items.append(previous[path])
                 continue
             decision = self.referee.evaluate_action("quarantine", path,
-                agent_id="sample-cleanup-agent", requested_by_slack_id=PRINCIPAL["id"],
-                reason="Cleanup agent requested deletion; the referee uses recoverable quarantine for the disposable demo.")
+                agent_id="cleanup-agent" if self.ai_agents is not None else "sample-cleanup-agent",
+                requested_by_slack_id=PRINCIPAL["id"], expected_hash=hashes.get(path), reason=reason)
             items.append(self.cleanup_item(decision))
-        self.state["cleanup"] = {"id": uuid.uuid4().hex, "items": items}
-        self.event("info", "Cleanup agent requested log deletion. The referee checks whether another agent still depends on each file.")
+        if self.ai_agents is not None:
+            items.extend(item for path, item in previous.items() if item["executed"] and path not in paths)
+        self.state["cleanup"] = {"id": uuid.uuid4().hex, "items": items,
+                                  "proposal_source": proposal_source}
+        self.event("info", "Cleanup agent requested log deletion. The referee checks whether another agent still depends on each file."
+                   if paths else "No new cleanup candidates were proposed. No files were changed.")
+        if self.fault_injection:
+            self.event("warning", "Cleanup used fixed fault-injection candidates to demonstrate referee protection; the model did not choose these paths.")
+        self._refresh_cleanup_explanation(use_model=True)
 
     @staticmethod
     def check_target(target: object, stored: dict | None) -> None:
@@ -211,6 +309,7 @@ class DemoSession:
                     fresh = self.referee.reevaluate_action(item["id"])
                     cleanup["items"][index] = self.cleanup_item(fresh)
                     self.event("info", f"{item['path']} has a fresh {fresh['verdict']} decision. Any eligible cleanup needs a new approval.")
+            self._refresh_cleanup_explanation()
 
     def approve_cleanup(self, target: object) -> None:
         cleanup = self.state["cleanup"]
@@ -223,6 +322,7 @@ class DemoSession:
             raise BridgeError("approval_unavailable", "This file is blocked or still required by a task. Approval is unavailable.", 409)
         result = self.referee.execute_approved_action(item["id"], PRINCIPAL["id"])
         item.update(self.cleanup_item(result))
+        self._refresh_cleanup_explanation()
         if not result["executed"]:
             self.event("warning", f"Cleanup prevented for {item['path']}. Request a fresh review.")
             raise BridgeError("stale_review", "The executor prevented cleanup. Refresh and request a fresh review.", 409)
@@ -232,7 +332,10 @@ class DemoSession:
 
 
 class BrowserBridge:
-    def __init__(self):
+    def __init__(self, *, ai_agents=None, fault_injection: bool = False):
+        self.ai_agents = ai_agents
+        self.fault_injection = fault_injection
+        self.generation = "openrouter" if ai_agents is not None else "sample"
         self.root = Path(tempfile.mkdtemp(prefix="reflex_browser_demo_"))
         self.root.chmod(0o700)
         self.token = secrets.token_urlsafe(32)
@@ -242,6 +345,12 @@ class BrowserBridge:
             handle.write(self.token + "\n")
         self.sessions: dict[tuple[str, str], DemoSession] = {}
         self.lock = threading.RLock()
+        # Model calls run inside the existing serialized workflow boundary.
+        # Polling has a separate lock, so HTTP requests never wait on a model.
+        self.jobs_lock = threading.Lock()
+        self.jobs: dict[str, dict] = {}
+        self.job_requests: dict[tuple[tuple[str, str], str], str] = {}
+        self.pending_jobs = 0
 
     def authenticated(self, header: str | None) -> bool:
         if not isinstance(header, str) or not header.startswith("Bearer "):
@@ -249,7 +358,8 @@ class BrowserBridge:
         candidate = header[7:]
         return len(candidate) <= 256 and hmac.compare_digest(candidate.encode(), self.token.encode())
 
-    def dispatch(self, body: object) -> dict:
+    @staticmethod
+    def _dispatch_input(body: object) -> tuple:
         if not isinstance(body, dict):
             raise BridgeError("invalid_request", "Send a JSON object.")
         operation = body.get("operation")
@@ -268,12 +378,78 @@ class BrowserBridge:
         if not isinstance(text, str) or len(text) > 2000:
             raise BridgeError("invalid_input", "Request text must be at most 2000 characters.")
         fingerprint = _revision([operation, text, body.get("target")])
+        return operation, key, request_id, text, fingerprint
+
+    def submit(self, body: object) -> dict:
+        """Queue one bounded job; repeated requests reuse the same pending job."""
+        operation, key, request_id, text, fingerprint = self._dispatch_input(body)
+        request_key = (key, request_id)
+        with self.jobs_lock:
+            existing_id = self.job_requests.get(request_key)
+            if existing_id is not None:
+                existing = self.jobs[existing_id]
+                if existing["fingerprint"] != fingerprint:
+                    raise BridgeError("request_conflict", "This request identifier was already used for different input.", 409)
+                return {"ok": True, "job_id": existing_id}
+            if self.pending_jobs >= MAX_PENDING_JOBS:
+                raise BridgeError("job_limit", "The local agents are busy. Wait for a current operation to finish, then retry.", 429)
+            while len(self.jobs) >= MAX_RETAINED_JOBS:
+                finished_id = next((job_id for job_id, job in self.jobs.items() if job["result"] is not None), None)
+                if finished_id is None:
+                    raise BridgeError("job_limit", "The local agents are busy. Wait for a current operation to finish, then retry.", 429)
+                finished = self.jobs.pop(finished_id)
+                self.job_requests.pop(finished["request_key"], None)
+            job_id = uuid.uuid4().hex
+            self.jobs[job_id] = {"request_key": request_key, "fingerprint": fingerprint,
+                                 "status": 202, "result": None}
+            self.job_requests[request_key] = job_id
+            self.pending_jobs += 1
+            # Copy before returning: subsequent caller mutations cannot change a
+            # queued approval target or model request.
+            worker = threading.Thread(target=self._run_job, args=(job_id, copy.deepcopy(body)), daemon=True)
+            try:
+                worker.start()
+            except RuntimeError as exc:
+                self.jobs.pop(job_id)
+                self.job_requests.pop(request_key)
+                self.pending_jobs -= 1
+                raise BridgeError("job_unavailable", "The local worker could not start. Try again.", 503) from exc
+            return {"ok": True, "job_id": job_id}
+
+    def _run_job(self, job_id: str, body: dict) -> None:
+        try:
+            result = self.dispatch(body)
+            status = 200
+        except BridgeError as exc:
+            status = exc.status
+            result = {"ok": False, "error": {"code": exc.code, "message": str(exc)}}
+        except Exception:
+            # Never return raw provider/OS exceptions, request headers, or keys.
+            status = 503
+            result = {"ok": False, "error": {"code": "demo_unavailable",
+                "message": "The local workflow could not finish. Refresh its status before retrying; check the backend configuration."}}
+        with self.jobs_lock:
+            self.jobs[job_id].update(status=status, result=result)
+            self.pending_jobs -= 1
+
+    def job_status(self, job_id: str) -> tuple[int, dict]:
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise BridgeError("unknown_job", "This operation is no longer available. Refresh the current workflow state.", 404)
+            if job["result"] is None:
+                return 202, {"ok": True, "job_id": job_id}
+            return job["status"], copy.deepcopy(job["result"])
+
+    def dispatch(self, body: object) -> dict:
+        operation, key, request_id, text, fingerprint = self._dispatch_input(body)
         with self.lock:
             session = self.sessions.get(key)
             if session is None:
                 if len(self.sessions) >= MAX_CONTEXTS:
                     raise BridgeError("context_limit", "Restart this demo bridge before adding more channels.", 429)
-                session = DemoSession(self.root / uuid.uuid4().hex, key)
+                session = DemoSession(self.root / uuid.uuid4().hex, key,
+                                      ai_agents=self.ai_agents, fault_injection=self.fault_injection)
                 self.sessions[key] = session
             if session.restart_required and operation != "status":
                 raise BridgeError("restart_required", "This fixture is paused after a report failure. Restart the bridge for a fresh demo.", 409)
@@ -361,7 +537,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         try:
             self._boundary(preflight=True)
-            if self.path not in {"/v1/session", "/v1/dispatch"}:
+            if (self.path not in {"/v1/session", "/v1/dispatch"}
+                    and not re.fullmatch(r"/v1/jobs/[0-9a-f]{32}", self.path)):
                 raise BridgeError("not_found", "Unknown bridge route.", 404)
             if not self.headers.get("Origin") or not self.server.allowed_origin:
                 raise BridgeError("invalid_origin", "Configure the extension ID before pairing.", 403)
@@ -377,9 +554,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._boundary()
-            if self.path != "/v1/session":
+            if self.path == "/v1/session":
+                self._respond(200, {"ok": True, "principal": dict(PRINCIPAL),
+                                   "mode": "local-demo", "generation": self.server.bridge.generation})
+            elif re.fullmatch(r"/v1/jobs/[0-9a-f]{32}", self.path):
+                status, result = self.server.bridge.job_status(self.path.rsplit("/", 1)[1])
+                self._respond(status, result)
+            else:
                 raise BridgeError("not_found", "Unknown bridge route.", 404)
-            self._respond(200, {"ok": True, "principal": dict(PRINCIPAL), "mode": "local-demo"})
         except BridgeError as exc:
             self._error(exc)
 
@@ -405,7 +587,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 body = json.loads(raw)
             except (UnicodeDecodeError, ValueError, RecursionError):
                 raise BridgeError("invalid_json", "Send a complete UTF-8 JSON object.")
-            self._respond(200, self.server.bridge.dispatch(body))
+            if self.server.bridge.ai_agents is not None:
+                self._respond(202, self.server.bridge.submit(body))
+            else:
+                self._respond(200, self.server.bridge.dispatch(body))
         except BridgeError as exc:
             self._error(exc)
         except (OSError, ValueError, KeyError):
@@ -415,13 +600,30 @@ class BridgeHandler(BaseHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--extension-id", help="ID shown in chrome://extensions; permits only that extension Origin.")
+    parser.add_argument("--live", action="store_true", help="Use backend OpenRouter agents on the disposable sample files.")
+    parser.add_argument("--fault-injection", action="store_true", help="With --live, use fixed cleanup candidates to demonstrate blocked/deferred actions.")
     args = parser.parse_args()
-    bridge = BrowserBridge()
+    if args.fault_injection and not args.live:
+        parser.error("--fault-injection requires --live. The default sample demo already uses fixed cleanup candidates.")
+    ai_agents = None
+    if args.live:
+        try:
+            from agents import OpenRouterClient, ReFlexAgents
+            ai_agents = ReFlexAgents(OpenRouterClient.from_env())
+        except Exception:
+            parser.error("Live mode needs a valid OPENROUTER_API_KEY and OPENROUTER_MODEL in this terminal. Check the setup guide; do not paste the key into extension settings.")
+    bridge = BrowserBridge(ai_agents=ai_agents, fault_injection=args.fault_injection)
     server = BridgeServer(bridge, extension_id=args.extension_id)
     print("reFlex local demo bridge: http://127.0.0.1:8765", flush=True)
     print(f"Pairing token file (private; copy its contents into extension settings): {bridge.token_path}", flush=True)
     print(f"Disposable fixtures and audit files: {bridge.root}", flush=True)
-    print("Local demo owner only. Slack context is not identity. Sample reports do not use an AI model.", flush=True)
+    print("Local demo owner only. Slack context is not identity.", flush=True)
+    if args.live:
+        print("OpenRouter agents enabled. Requests use account credits; only disposable sample files are available.", flush=True)
+        if args.fault_injection:
+            print("Fault injection: cleanup candidates are fixed demonstration inputs, not an AI selection.", flush=True)
+    else:
+        print("Sample reports do not use an AI model. Add --live to enable backend OpenRouter agents.", flush=True)
     if not args.extension_id:
         print("If Chrome sends an Origin header, restart with --extension-id YOUR_EXTENSION_ID.", flush=True)
     try:
