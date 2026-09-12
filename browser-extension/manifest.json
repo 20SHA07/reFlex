@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "reFlex · Agent Referee",
+  "version": "0.1.0",
+  "description": "Review agent conflicts beside Slack. Protect source data, defer active dependencies, and approve safe cleanup.",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage"],
+  "optional_host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "Open reFlex referee"},
+  "side_panel": {"default_path": "panel.html"},
+  "content_scripts": [{
+    "matches": ["https://app.slack.com/client/*"],
+    "js": ["ember.js", "slack-adapter.js", "content.js"],
+    "run_at": "document_idle"
+  }],
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:8765"}
+}
